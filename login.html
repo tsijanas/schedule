@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rota — Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FFFFFF; --paper:#F7F7F7; --ink:#004654; --ink-soft:#1D4249; --ink-faint:#4A6167;
+    --line:rgba(0,70,84,0.22); --gold:#FFE13B; --sidebar:#004654; --sidebar-ink:#EDFFE9;
+    --brick:#FFA580; --brick-soft:#FFD2BF; --brick-text:#8A3A1E;
+    --radius:16px; --shadow: 0 2px 4px rgba(0,70,84,0.10), 0 8px 24px rgba(0,70,84,0.12);
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    background:var(--bg); color:var(--ink); font-family:'Inter',system-ui,sans-serif; font-size:14px;
+    -webkit-font-smoothing:antialiased; display:flex; align-items:center; justify-content:center; min-height:100%;
+    padding:20px;
+  }
+  h1,.serif{ font-family:'Fraunces',Georgia,serif; }
+  button{ font-family:inherit; cursor:pointer; }
+  input:focus-visible, button:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
+
+  .card{
+    background:var(--paper); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:var(--shadow); padding:32px 30px; width:360px; max-width:100%;
+  }
+  .brand{ display:flex; align-items:center; gap:8px; margin-bottom:22px; }
+  .brand svg{ width:30px; height:20px; flex-shrink:0; }
+  .brand-name{ font-family:'Fraunces',serif; font-weight:600; font-size:21px; color:var(--ink); }
+
+  h1{ font-size:20px; margin:0 0 4px 0; font-weight:600; }
+  .sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 22px 0; line-height:1.5; }
+
+  label{ display:block; font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); margin:14px 0 5px 0; }
+  input[type=text], input[type=email], input[type=password]{
+    width:100%; font-family:inherit; font-size:14px; padding:9px 11px; border:1px solid var(--line);
+    border-radius:8px; background:#fff; color:var(--ink);
+  }
+
+  .btn{
+    width:100%; margin-top:20px; padding:10px 14px; border-radius:10px; border:none;
+    background:var(--ink); color:var(--sidebar-ink); font-weight:600; font-size:13.5px;
+  }
+  .btn:hover{ background:#00323c; }
+  .btn:disabled{ opacity:0.6; cursor:default; }
+
+  .switch{ margin-top:16px; text-align:center; font-size:12.5px; color:var(--ink-soft); }
+  .switch button{ background:none; border:none; color:var(--ink); font-weight:600; text-decoration:underline; padding:0; font-size:12.5px; }
+
+  .error{
+    display:none; margin-top:14px; background:var(--brick-soft); color:var(--brick-text);
+    border:1px solid var(--brick); border-radius:8px; padding:9px 11px; font-size:12.5px; font-weight:500;
+  }
+  .error.show{ display:block; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="brand">
+    <svg viewBox="0 0 50 30" xmlns="http://www.w3.org/2000/svg"><rect width="50" height="30" rx="6" fill="#004654"/><circle cx="15" cy="15" r="5" fill="#EDFFE9"/><circle cx="31" cy="15" r="5" fill="#FFE13B"/></svg>
+    <div class="brand-name">Rota</div>
+  </div>
+
+  <h1 id="form-title">Sign in</h1>
+  <p class="sub" id="form-sub">Enter your email and password to see your schedule.</p>
+
+  <form id="auth-form">
+    <div id="name-field" style="display:none;">
+      <label for="f-name">Your name</label>
+      <input type="text" id="f-name" autocomplete="name" placeholder="Jamie Rivera">
+    </div>
+    <label for="f-email">Email</label>
+    <input type="email" id="f-email" autocomplete="email" required placeholder="you@company.com">
+    <label for="f-password">Password</label>
+    <input type="password" id="f-password" autocomplete="current-password" required placeholder="••••••••" minlength="6">
+    <button type="submit" class="btn" id="btn-submit">Sign in</button>
+  </form>
+
+  <div class="error" id="form-error"></div>
+
+  <div class="switch">
+    <span id="switch-text">New here?</span>
+    <button type="button" id="btn-switch">Create an account</button>
+  </div>
+</div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+  import {
+    getAuth, onAuthStateChanged, signInWithEmailAndPassword,
+    createUserWithEmailAndPassword, updateProfile
+  } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+  import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDSMLKjzO0D_sZLG-0o3lcx2M-sBZOx7xs",
+    authDomain: "schedule-75592.firebaseapp.com",
+    projectId: "schedule-75592",
+    storageBucket: "schedule-75592.firebasestorage.app",
+    messagingSenderId: "462168002601",
+    appId: "1:462168002601:web:b070d152e9ac270b9fcc38"
+  };
+  const firebaseApp = initializeApp(firebaseConfig);
+  const auth = getAuth(firebaseApp);
+  const db = getFirestore(firebaseApp);
+
+  // Already signed in? Skip straight to the app — index.html will sort out whether this
+  // account is approved yet or still needs to wait.
+  onAuthStateChanged(auth, (user)=>{ if(user) window.location.replace('index.html'); });
+
+  let mode = 'signin'; // or 'signup'
+  const form = document.getElementById('auth-form');
+  const nameField = document.getElementById('name-field');
+  const nameInput = document.getElementById('f-name');
+  const emailInput = document.getElementById('f-email');
+  const passwordInput = document.getElementById('f-password');
+  const errorBox = document.getElementById('form-error');
+  const submitBtn = document.getElementById('btn-submit');
+
+  function setMode(next){
+    mode = next;
+    const signup = mode === 'signup';
+    document.getElementById('form-title').textContent = signup ? 'Create your account' : 'Sign in';
+    document.getElementById('form-sub').textContent = signup
+      ? "You'll get in right away, but an admin still needs to add you to a team before you can see the schedule."
+      : 'Enter your email and password to see your schedule.';
+    nameField.style.display = signup ? 'block' : 'none';
+    nameInput.required = signup;
+    passwordInput.setAttribute('autocomplete', signup ? 'new-password' : 'current-password');
+    submitBtn.textContent = signup ? 'Create account' : 'Sign in';
+    document.getElementById('switch-text').textContent = signup ? 'Already have an account?' : 'New here?';
+    document.getElementById('btn-switch').textContent = signup ? 'Sign in instead' : 'Create an account';
+    errorBox.classList.remove('show');
+  }
+  document.getElementById('btn-switch').addEventListener('click', ()=> setMode(mode==='signup' ? 'signin' : 'signup'));
+
+  function friendlyError(code){
+    const map = {
+      'auth/invalid-email': 'That email address doesn\u2019t look right.',
+      'auth/user-not-found': 'No account with that email. Try creating one instead.',
+      'auth/wrong-password': 'Wrong password. Try again.',
+      'auth/invalid-credential': 'Email or password is incorrect.',
+      'auth/email-already-in-use': 'An account already exists for that email. Try signing in instead.',
+      'auth/weak-password': 'Use at least 6 characters for your password.',
+    };
+    return map[code] || 'Something went wrong. Please try again.';
+  }
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    errorBox.classList.remove('show');
+    submitBtn.disabled = true;
+    const email = emailInput.value.trim();
+    const password = passwordInput.value;
+    try{
+      if(mode === 'signup'){
+        const name = nameInput.value.trim();
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        if(name) await updateProfile(cred.user, { displayName: name });
+        // Record the signup request up front — index.html's access check will also do this
+        // as a fallback, but doing it here means the admin sees the right name immediately.
+        try{
+          await setDoc(doc(db, 'signup_requests', cred.user.uid), { name: name || email, email, createdAt: Date.now() });
+        }catch(err){ /* rules may reject this for a bootstrap-admin edge case; index.html handles it either way */ }
+      } else {
+        await signInWithEmailAndPassword(auth, email, password);
+      }
+      window.location.replace('index.html');
+    }catch(err){
+      console.error(err);
+      errorBox.textContent = friendlyError(err.code);
+      errorBox.classList.add('show');
+      submitBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+rules_version = '2';
+
+// ============================================================================
+// Rota — access control
+//
+// Data model this protects:
+//   - rota_kv/{docId}          the app's shared data (members, teams, schedules, holidays…)
+//                               stored as single JSON blobs, one doc per key.
+//   - access_control/approved  { uids: [...] }  the allow-list. Only uids in here get in.
+//   - signup_requests/{uid}    one doc per person waiting on an admin, doc id == their own uid.
+//
+// The important idea: authentication (Firebase Auth) only proves *who* someone is.
+// Whether they're allowed to see anything is decided here, not in index.html's JavaScript —
+// a user can read/edit that JavaScript freely, but they cannot rewrite these rules.
+// ============================================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Mirrors OWNER_EMAILS in index.html. Safe to hardcode: Firebase Auth verifies the email
+    // on sign-in, so nobody but the real owner of this address can ever satisfy this check —
+    // it's a guarantee for that one person, not a hole for anyone else. Keep this list short
+    // and keep both copies (here and in index.html) in sync.
+    function isOwner() {
+      return isSignedIn() && request.auth.token.email in ['mrsijanas@gmail.com'];
+    }
+
+    function approvedUids() {
+      return get(/databases/$(database)/documents/access_control/approved).data.uids;
+    }
+
+    function isApproved() {
+      return isOwner() || (
+        isSignedIn() && (
+          (exists(/databases/$(database)/documents/access_control/approved) && request.auth.uid in approvedUids())
+          || exists(/databases/$(database)/documents/claimed_links/$(request.auth.uid))
+        )
+      );
+    }
+
+    // Kept in sync by the app (access_control/managers) with whoever currently holds the
+    // Manager tag in app_members. This is what makes "only Managers can edit member data"
+    // an actual server-side rule instead of just a hidden button in the UI.
+    function isManagerUid() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/access_control/managers)
+        && request.auth.uid in get(/databases/$(database)/documents/access_control/managers).data.uids;
+    }
+
+    // ---- Input validation ----
+    // Everything above answers "who can write here." These answer "is what they're writing
+    // actually sane" — required fields present, correct types, reasonable length caps. This
+    // matters because these rules are the real backend for this app: the client-side JS can be
+    // bypassed entirely (anyone can call the Firestore SDK directly from a browser console),
+    // so validation has to live here to mean anything, not just in index.html's form code.
+    function isValidMember(d) {
+      return d.name is string && d.name.size() <= 100
+        && d.levels is list && d.levels.size() <= 10
+        && (d.teamId == null || d.teamId is string)
+        && (!('isAdmin' in d) || d.isAdmin is bool)
+        && (!('role' in d) || d.role == null || d.role in ['admin','manager'])
+        && (!('managerDeptId' in d) || d.managerDeptId == null || d.managerDeptId is string)
+        && (!('birthday' in d) || d.birthday == null || (d.birthday is string && d.birthday.size() == 5))
+        && d.eligibility is map;
+    }
+    function isValidHoliday(d) {
+      return d.dates is list && d.dates.size() <= 400
+        && d.reasons is map;
+    }
+    function isValidContact(d) {
+      return d.email is string && d.email.size() <= 200
+        && (d.authUid == null || (d.authUid is string && d.authUid.size() <= 128));
+    }
+    function isValidKv(d) {
+      // Every rota_kv doc is a JSON-stringified blob under `value` — can't validate its inner
+      // shape generically here (it differs per key: teams, tasks, schedules…), but can at
+      // least ensure it's the right type and not absurdly large (Firestore's own hard cap is
+      // 1MB per doc; this keeps individual writes well under that on purpose).
+      return d.value is string && d.value.size() < 900000;
+    }
+
+    // ---- Proof of a self-claimed invite. When someone signs up with the same email an admin
+    // already pre-entered for them (an "invite"), they claim it (see member_contacts self-claim
+    // below) instead of being queued for approval. This doc is how that grants access: the
+    // rule verifies the linked member_contacts record really does show this exact uid+email
+    // before allowing the marker to be created — nobody can fabricate a claim for an invite
+    // that isn't genuinely theirs, since get() below reads the real, already-written record.
+    match /claimed_links/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow create: if isOwner() || isManagerUid() || (
+        isSignedIn() && request.auth.uid == uid
+        && get(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId)).data.authUid == request.auth.uid
+        && get(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId)).data.email == request.auth.token.email
+      );
+      allow delete: if isOwner() || isManagerUid();
+      allow update: if false;
+    }
+
+    // ---- Direct email -> memberId lookup, used only so login can find "does an invite exist
+    // for this email" with a single, unambiguous document read instead of a collection query.
+    // A query whose read rule depends on more than the filtered field can be rejected by
+    // Firestore outright, even when the one matching document would itself be perfectly
+    // readable — this index exists specifically to avoid depending on that working.
+    match /email_index/{emailKey} {
+      allow read: if isSignedIn();
+      allow write: if isOwner() || isManagerUid();
+    }
+
+    // ---- Contact info (email, authUid), split out of app_members. Everyone approved can read
+    // the roster (app_members) to see names/teams/schedules, but email addresses and the
+    // technical auth-account link are Manager/owner-only — EXCEPT each person can look up their
+    // own contact doc, constrained to a query on their own uid, which is how the app finds
+    // "which member row is me" on login without needing broad read access. ----
+    match /member_contacts/{memberId} {
+      allow read: if isOwner() || isManagerUid() || resource.data.authUid == request.auth.uid
+        || (isSignedIn() && resource.data.authUid == null && resource.data.email == request.auth.token.email);
+      allow create: if (isOwner() || isManagerUid()) && isValidContact(request.resource.data);
+      allow update: if isValidContact(request.resource.data) && (
+        isOwner() || isManagerUid()
+        || (
+          // Self-claim: a signed-in person may claim an unclaimed record that matches their
+          // own verified email, but only by setting authUid to exactly their own uid — the
+          // email itself can't change, and nothing else about the record can be touched this way.
+          isSignedIn()
+          && resource.data.authUid == null
+          && resource.data.email == request.auth.token.email
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.authUid == request.auth.uid
+        )
+      );
+      allow delete: if isOwner() || isManagerUid();
+    }
+
+    // ---- The shared app data. Only people an admin has approved may read or write it. ----
+    match /rota_kv/{docId} {
+      allow read: if isApproved();
+      allow create, update: if isApproved() && isValidKv(request.resource.data);
+      allow delete: if isApproved();
+    }
+
+    // ---- Members, one doc per person (app_members/{memberId}) instead of one shared blob.
+    // Reading your team's roster is fine for anyone approved (that's how schedules render for
+    // everyone) — but WRITING someone's team/level/name now genuinely requires being a Manager
+    // or the owner, enforced here, not just hidden behind a button in the UI.
+    match /app_members/{memberId} {
+      allow read: if isApproved();
+      allow create: if (isOwner() || isManagerUid()) && isValidMember(request.resource.data);
+      allow update: if isValidMember(request.resource.data) && (
+        isOwner() || isManagerUid()
+        || (
+          // Self-claim name: someone who just registered via an email-only invite may set
+          // their own name — but only once (while it's still blank), only on the exact
+          // record they were just linked to, and this can never touch team, level, role, or
+          // eligibility — those stay admin-only, same as always.
+          isSignedIn()
+          && exists(/databases/$(database)/documents/claimed_links/$(request.auth.uid))
+          && get(/databases/$(database)/documents/claimed_links/$(request.auth.uid)).data.memberId == memberId
+          && resource.data.name == ''
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && request.resource.data.name.size() > 0
+        )
+      );
+      allow delete: if isOwner() || isManagerUid();
+    }
+
+    // ---- Holidays, one doc per person (app_holidays/{memberId}). Anyone approved can read
+    // (teams need to see each other's days off to coordinate) or write (marking your own days
+    // off is self-service, same as it always was — this isn't Manager-gated). ----
+    match /app_holidays/{memberId} {
+      allow read: if isApproved();
+      allow create, update: if isApproved() && isValidHoliday(request.resource.data);
+      allow delete: if isApproved();
+    }
+
+    // ---- The manager roster. Bootstraps once, the same way access_control/approved does:
+    // whoever's already approved when this collection doesn't exist yet may seed it (covers
+    // both a brand-new install and the one-time migration of whoever already held the Manager
+    // tag in app_members before this rule existed). After that, only an existing manager or
+    // the owner may change it. ----
+    match /access_control/managers {
+      allow read: if isApproved();
+      allow create: if isApproved() && !exists(/databases/$(database)/documents/access_control/managers);
+      allow update: if (isOwner() || isManagerUid()) && request.resource.data.uids is list;
+      allow delete: if false;
+    }
+
+    // ---- The allow-list itself. ----
+    match /access_control/approved {
+      // Bootstrap: if this document doesn't exist yet, nobody has ever been approved, which
+      // means nobody could pass isApproved() to create it either — so the very first
+      // authenticated user is allowed to create it (containing only themselves). This mirrors
+      // the app's own "first person in becomes admin" bootstrap logic in index.html.
+      allow create: if isSignedIn()
+        && !exists(/databases/$(database)/documents/access_control/approved)
+        && request.resource.data.uids.size() == 1
+        && request.resource.data.uids[0] == request.auth.uid;
+
+      // Every signed-in user — including brand-new, not-yet-approved ones — has to be able
+      // to read this list just to check "is my uid on it?" (that's how they find out whether
+      // they're pending). So read only requires being signed in; it's just a list of uids,
+      // nothing sensitive. Adding someone new to it (i.e. approving them) still requires the
+      // caller to already be approved themselves.
+      allow read: if isSignedIn();
+      allow update: if isApproved() && request.resource.data.uids is list;
+      allow delete: if false;
+    }
+
+    // ---- Pending signups: one doc per waiting account, keyed by that account's own uid. ----
+    match /signup_requests/{uid} {
+      // You may create only your own request, and only with these three fields — you cannot
+      // pre-approve yourself, set a team, or claim to be someone else's uid.
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'createdAt'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 100
+        && request.resource.data.email is string && request.resource.data.email.size() <= 200
+        && request.resource.data.createdAt is number;
+
+      // You can check your own pending status; approved users (admins) can see the queue.
+      allow read: if isSignedIn() && (request.auth.uid == uid || isApproved());
+
+      // Only an admin (via the approve-and-assign flow) removes a request, once that person
+      // has been given a member record and added to the allow-list.
+      allow delete: if isApproved();
+      allow update: if false;
+    }
+    // ---- Audit log: append-only record of admin/write actions. Anyone approved can write an
+    // entry, but only one describing their own uid as the actor — nobody can log an action as
+    // someone else. Reading the log is Manager/owner-only (need-to-know, per the privacy
+    // team's least-access note). Nothing can ever be edited or deleted, so it stays a genuine
+    // record rather than something that could be quietly rewritten after the fact.
+    match /audit_log/{entryId} {
+      allow create: if isApproved() && request.resource.data.actorUid == request.auth.uid;
+      allow read: if isOwner() || isManagerUid();
+      allow update, delete: if false;
+    }
+
+    // ---- Ideas & Bugs tracker: anyone approved can submit and read the list (so people
+    // closest to the actual work can flag what's needed), but only a Manager/owner can move
+    // something's status/priority or remove it — matches how triage/prioritization is a
+    // deliberate admin action everywhere else in this app.
+    function isValidIdea(d){
+      return d.type in ['idea','bug']
+        && d.title is string && d.title.size() > 0 && d.title.size() <= 200
+        && (d.description == null || (d.description is string && d.description.size() <= 4000))
+        && d.status in ['backlog','in_progress','done']
+        && d.priority in ['low','medium','high'];
+    }
+    match /ideas_log/{ideaId} {
+      allow read: if isApproved();
+      allow create: if isApproved() && isValidIdea(request.resource.data)
+        && request.resource.data.submittedBy == request.auth.uid
+        && request.resource.data.status == 'backlog';
+      allow update: if (isOwner() || isManagerUid()) && isValidIdea(request.resource.data);
+      allow delete: if isOwner() || isManagerUid();
+    }
+
+    // ---- Notifications: schedule-change alerts for a specific person, stored as a
+    // subcollection per member (notifications/{memberId}/items/{notifId}) rather than one
+    // flat collection filtered by a memberId field. That matters: a flat collection would
+    // need a query filtered on memberId while the read rule also depends on the caller's own
+    // claimed_links — the same shape as a real bug hit earlier, where Firestore can reject a
+    // multi-document query outright if its rule depends on more than the filtered field, even
+    // when the one matching document would itself be perfectly readable. Scoping by path
+    // instead sidesteps that: the subcollection IS the scope, so the rule doesn't need a
+    // where-filter to reason about at all.
+    function isOwnNotifPath(memberId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/claimed_links/$(request.auth.uid))
+        && get(/databases/$(database)/documents/claimed_links/$(request.auth.uid)).data.memberId == memberId;
+    }
+    match /notifications/{memberId}/items/{notifId} {
+      allow read: if isOwner() || isManagerUid() || isOwnNotifPath(memberId);
+      // Batched schedule-change notifications ("Send notifications") stay strictly
+      // Admin/Manager — that's the whole point of requiring their confirmation before sending.
+      // Instant OOO-coverage notifications are different: they can be triggered by a plain
+      // Viewer marking themselves off, so any approved (signed-in, not just admin) person may
+      // create one — but only that one narrow kind, never the batched kind. Worst-case misuse
+      // here is a misleading informational message, not a privilege or data-access issue —
+      // notifications don't grant access to anything.
+      allow create: if isOwner() || isManagerUid()
+        || (isApproved() && request.resource.data.kind == 'ooo_coverage');
+      allow update: if (isOwner() || isManagerUid())
+        || (isOwnNotifPath(memberId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']));
+      allow delete: if isOwner() || isManagerUid();
+    }
+  }
+}

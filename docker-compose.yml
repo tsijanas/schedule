@@ -1,0 +1,13 @@
+# Local testing / a simple reference for IT — spins up the site on http://localhost:8080
+#
+#   docker compose up --build
+#
+# In production, your IT team will more likely run the built image behind their own reverse
+# proxy (for TLS/HTTPS, their own domain, etc.) rather than using this file directly — but this
+# is the fastest way to confirm the container itself works before that's set up.
+services:
+  rota:
+    build: .
+    ports:
+      - "8080:80"
+    restart: unless-stopped
