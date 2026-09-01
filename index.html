@@ -593,6 +593,7 @@
     <div class="sidebar-panel admin-only">
       <button class="nav-item admin-only" data-tab="balance">Rotation balance</button>
       <button class="nav-item admin-only" data-tab="ideas">Ideas &amp; Bugs</button>
+      <button class="nav-item admin-only" data-tab="departments" id="nav-departments" style="display:none;">Departments</button>
       <button class="nav-item admin-only" data-tab="data">Data</button>
       <div class="sidebar-foot admin-only">Autosaves to the cloud when that's available — check the Data tab to back up or move your data manually otherwise.</div>
     </div>
@@ -1035,6 +1036,17 @@
       </div>
     </div>
 
+    <!-- DEPARTMENTS TAB (org admin only) -->
+    <div class="tab-panel" id="tab-departments">
+      <div class="page-head">
+        <h1>Departments</h1>
+        <p>Groups several teams together, with an optional combined Grand Schedule, Requirement, Balance, and Registry.</p>
+      </div>
+      <div class="card" id="dept-setup-card">
+        <div id="dept-setup-body"></div>
+      </div>
+    </div>
+
     <!-- DATA TAB -->
     <div class="tab-panel" id="tab-data">
       <div class="page-head">
@@ -1062,11 +1074,6 @@
           <div class="spacer"></div>
           <button class="btn small" id="btn-import">Load this data</button>
         </div>
-      </div>
-      <div class="card" id="dept-setup-card">
-        <h3>Set up a department</h3>
-        <div class="hint">Groups several teams under one department, with a combined Grand Schedule and Grand Requirement. Create the department first, then add teams to it — nothing about any existing team is touched by creating a department itself.</div>
-        <div id="dept-setup-body"></div>
       </div>
       <div class="card">
         <h3>Import team roster</h3>
@@ -1964,28 +1971,44 @@ function renderDeptSetupCard(){
   const me = currentViewerMember();
   const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
 
-  const teamsSummary = dept=>{
-    const teamsIn = state.teams.filter(t=>t.departmentId===dept.id);
-    return teamsIn.length===0 ? 'No teams yet — add one from Team & People\'s "+ Add team".' : teamsIn.map(t=>escHtml(t.name)).join(', ');
-  };
+  const teamsIn = dept=> state.teams.filter(t=>t.departmentId===dept.id);
 
   if(!isOrgAdmin){
     const listHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
       <div style="font-weight:700; font-size:13.5px; margin-bottom:4px;">${escHtml(dept.name)}</div>
-      <div class="muted" style="font-size:12px;">${teamsSummary(dept)}</div>
+      <div class="muted" style="font-size:12px;">${teamsIn(dept).length===0 ? 'No teams yet.' : teamsIn(dept).map(t=>escHtml(t.name)).join(', ')}</div>
     </div>`).join('');
     wrap.innerHTML = listHtml || `<div class="muted" style="font-size:12.5px;">No departments yet.</div>`
-      + `<div class="muted" style="font-size:11.5px; margin-top:8px;">Only an Admin can create a new department — you can still create teams within your own from Team &amp; People.</div>`;
+      + `<div class="muted" style="font-size:11.5px; margin-top:8px;">Only an Admin can create or edit a department — you can still create teams within your own from Team &amp; People.</div>`;
     return;
   }
 
-  const listHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
-    <input type="text" class="dept-name-edit" data-dept="${dept.id}" value="${escAttr(dept.name)}" style="font-weight:700; font-size:13.5px; border:none; background:none; padding:0; width:100%; margin-bottom:4px;">
-    <div class="muted" style="font-size:12px;">${teamsSummary(dept)}</div>
+  // "Move to…" needs every OTHER department plus a "No department" option, per team.
+  const deptOptionsHtml = (currentDeptId, teamId)=>{
+    let opts = `<option value="__none__">No department</option>`;
+    opts += state.departments.map(d=>`<option value="${d.id}" ${d.id===currentDeptId?'selected':''}>${escHtml(d.name)}</option>`).join('');
+    return `<select class="dept-team-move" data-team="${teamId}">${opts}</select>`;
+  };
+
+  const listHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
+    <input type="text" class="dept-name-edit" data-dept="${dept.id}" value="${escAttr(dept.name)}" style="font-weight:700; font-size:14px; border:none; background:none; padding:0; width:100%; margin-bottom:8px;">
+    <label class="chip-check" style="display:inline-flex; margin-bottom:10px;"><input type="checkbox" class="dept-grand-views-edit" data-dept="${dept.id}" ${dept.showGrandViews!==false?'checked':''}> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
+    <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:6px;">Teams</div>
+    ${teamsIn(dept).length===0
+      ? `<div class="muted" style="font-size:12px;">No teams yet — add one from Team &amp; People's "+ Add team", or move one here below.</div>`
+      : teamsIn(dept).map(t=>`<div class="row" style="margin-bottom:6px;"><span style="font-size:13px;">${escHtml(t.name)}</span><div class="spacer"></div>${deptOptionsHtml(dept.id, t.id)}</div>`).join('')}
   </div>`).join('');
 
-  wrap.innerHTML = listHtml + `
-    <div class="field" style="margin-top:${listHtml?'16px':'0'};">
+  // Teams with no department at all — shown once, below every department card, each with its
+  // own "move to…" so it's easy to place stray/ungrouped teams without leaving this tab.
+  const ungroupedTeams = state.teams.filter(t=>!t.departmentId);
+  const ungroupedHtml = ungroupedTeams.length>0 ? `<div style="border:1px dashed var(--line); border-radius:10px; padding:14px; margin-bottom:16px;">
+    <div style="font-weight:700; font-size:13.5px; margin-bottom:8px;">Not in a department</div>
+    ${ungroupedTeams.map(t=>`<div class="row" style="margin-bottom:6px;"><span style="font-size:13px;">${escHtml(t.name)}</span><div class="spacer"></div>${deptOptionsHtml(null, t.id)}</div>`).join('')}
+  </div>` : '';
+
+  wrap.innerHTML = listHtml + ungroupedHtml + `
+    <div class="field" style="margin-top:${listHtml||ungroupedHtml?'16px':'0'};">
       <label>New department name</label>
       <input type="text" id="dept-name-input" placeholder="e.g. AML Operations">
     </div>
@@ -1993,7 +2016,7 @@ function renderDeptSetupCard(){
       <label class="chip-check" style="display:inline-flex;"><input type="checkbox" id="dept-grand-views-toggle" checked> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
       <div class="muted" style="font-size:11px; margin-top:4px;">Turn this off for a department that's really just several separate, independent teams grouped for organizing purposes — each team stays fully independent, with no combined view or department-wide requirement splitting.</div>
     </div>
-    <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward from Team &amp; People's "+ Add team" (pick this department there, or it'll use whichever one you're currently viewing).</div>
+    <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward here, or from Team &amp; People's "+ Add team".</div>
     <div class="row" style="margin-top:14px;"><div class="spacer"></div><button class="btn small" id="btn-create-dept">Create department</button></div>
   `;
   document.getElementById('btn-create-dept').addEventListener('click', async ()=>{
@@ -2028,6 +2051,43 @@ function renderDeptSetupCard(){
     };
     inp.addEventListener('blur', saveIfChanged);
     inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
+  });
+  wrap.querySelectorAll('.dept-grand-views-edit').forEach(cb=>{
+    cb.addEventListener('change', async ()=>{
+      const dept = state.departments.find(d=>d.id===cb.dataset.dept);
+      if(!dept) return;
+      const prev = dept.showGrandViews;
+      dept.showGrandViews = cb.checked;
+      const ok = await safeSet('departments', state.departments);
+      if(ok){
+        showToast(cb.checked ? 'Grand views turned on' : 'Grand views turned off');
+        logAudit('department.grand_views_toggle', { name: dept.name, showGrandViews: cb.checked });
+        renderTeamSwitcher(); // Grand nav box visibility depends on this, for whichever team is currently active
+      } else {
+        dept.showGrandViews = prev;
+        cb.checked = prev !== false;
+      }
+    });
+  });
+  wrap.querySelectorAll('.dept-team-move').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const team = state.teams.find(t=>t.id===sel.dataset.team);
+      if(!team) return;
+      const newDeptId = sel.value==='__none__' ? null : sel.value;
+      const prevDeptId = team.departmentId || null;
+      if(newDeptId===prevDeptId) return;
+      team.departmentId = newDeptId;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){
+        const newDeptName = newDeptId ? (state.departments.find(d=>d.id===newDeptId)?.name||'') : 'no department';
+        showToast(`Moved ${team.name} to ${newDeptName}`);
+        logAudit('team.department_move', { team: team.name, from: prevDeptId||'(none)', to: newDeptId||'(none)' });
+        renderTeamSwitcher();
+      } else {
+        team.departmentId = prevDeptId;
+      }
+      renderDeptSetupCard();
+    });
   });
 }
 
@@ -2599,7 +2659,8 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='balance') renderBalanceTab();
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
-    if(btn.dataset.tab==='data'){ renderAuditLog(); renderDeptSetupCard(); }
+    if(btn.dataset.tab==='data'){ renderAuditLog(); }
+    if(btn.dataset.tab==='departments'){ renderDeptSetupCard(); }
     if(btn.dataset.tab==='ideas') renderIdeasTab();
     if(btn.dataset.tab==='grand') renderGrandTab();
     if(btn.dataset.tab==='grand-req') renderGrandReqPageTab();
@@ -7287,6 +7348,7 @@ function setMode(mode){
     document.getElementById('tab-schedule').classList.add('active');
     renderTeamSwitcher();
     renderScheduleTab();
+    updateDepartmentsNavVisibility();
   }
   restoreLastActiveTab();
 }
@@ -7338,6 +7400,16 @@ function updateWhosOnNavVisibility(){
   if(!nav) return;
   const hasAny = Object.keys(whosOnPermittedGroups()).length > 0;
   nav.style.display = hasAny ? '' : 'none';
+}
+// Departments is Admin-only functionality, distinct from Manager — a Manager gets the admin
+// UI generally, but never department creation/editing, so this needs its own runtime check
+// rather than just the existing admin-only CSS class (which doesn't distinguish the two roles).
+function updateDepartmentsNavVisibility(){
+  const nav = document.getElementById('nav-departments');
+  if(!nav) return;
+  const me = currentViewerMember();
+  const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
+  nav.style.display = isOrgAdmin ? '' : 'none';
 }
 let whosOnWeekMonday = null;
 async function renderWhosOnTab(){
