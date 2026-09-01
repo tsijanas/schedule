@@ -2001,14 +2001,19 @@ function renderDeptSetupCard(){
     ${moveMenuHtml(dept ? dept.id : null, t.id)}
   </div>`;
 
-  const listHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
+  const listHtml = state.departments.map(dept=> `<div class="dept-card" data-dept="${dept.id}" style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
     <input type="text" class="dept-name-edit" data-dept="${dept.id}" value="${escAttr(dept.name)}" style="font-weight:700; font-size:14px; border:none; background:none; padding:0; width:100%; margin-bottom:8px;">
     <label class="chip-check" style="display:inline-flex; margin-bottom:10px;"><input type="checkbox" class="dept-grand-views-edit" data-dept="${dept.id}" ${dept.showGrandViews!==false?'checked':''}> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
     <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">Teams</div>
     ${teamsIn(dept).length===0
       ? `<div class="muted" style="font-size:12px; margin-bottom:8px;">No teams yet.</div>`
       : teamsIn(dept).map(t=>teamRowHtml(dept, t)).join('')}
-    <div class="row" style="margin-top:8px;"><button type="button" class="btn secondary small btn-new-team-in-dept" data-dept="${dept.id}">+ New team in this department</button></div>
+    <div class="row" style="margin-top:10px;">
+      <button type="button" class="btn secondary small btn-new-team-in-dept" data-dept="${dept.id}">+ New team in this department</button>
+      <div class="spacer"></div>
+      <span class="muted dept-unsaved-note" data-dept="${dept.id}" style="font-size:11px; display:none;">Unsaved changes</span>
+      <button type="button" class="btn small btn-save-dept" data-dept="${dept.id}">Save</button>
+    </div>
   </div>`).join('');
 
   // Teams with no department at all — shown once, below every department card, each with its
@@ -2050,42 +2055,34 @@ function renderDeptSetupCard(){
     renderDeptSetupCard();
     renderTeamSwitcher();
   });
-  wrap.querySelectorAll('.dept-name-edit').forEach(inp=>{
-    const saveIfChanged = async ()=>{
-      const dept = state.departments.find(d=>d.id===inp.dataset.dept);
-      if(!dept) return;
-      const newName = inp.value.trim();
-      if(!newName){ inp.value = dept.name; return; } // never save a blank name — just revert
-      if(newName === dept.name) return;
-      const oldName = dept.name;
-      dept.name = newName;
-      const ok = await safeSet('departments', state.departments);
-      if(ok){
-        showToast(`Renamed to "${newName}"`);
-        logAudit('department.rename', { from: oldName, to: newName });
-        renderTeamSwitcher(); // department name shows there too (picker + Grand tab labels)
-      } else {
-        dept.name = oldName; // roll back locally if the save itself failed
-        inp.value = oldName;
-      }
-    };
-    inp.addEventListener('blur', saveIfChanged);
-    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
+  wrap.querySelectorAll('.dept-name-edit, .dept-grand-views-edit').forEach(el=>{
+    el.addEventListener('input', ()=> markDeptUnsaved(el.dataset.dept));
+    el.addEventListener('change', ()=> markDeptUnsaved(el.dataset.dept));
   });
-  wrap.querySelectorAll('.dept-grand-views-edit').forEach(cb=>{
-    cb.addEventListener('change', async ()=>{
-      const dept = state.departments.find(d=>d.id===cb.dataset.dept);
+  function markDeptUnsaved(deptId){
+    const note = wrap.querySelector(`.dept-unsaved-note[data-dept="${deptId}"]`);
+    if(note) note.style.display = 'inline';
+  }
+  wrap.querySelectorAll('.btn-save-dept').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const deptId = btn.dataset.dept;
+      const dept = state.departments.find(d=>d.id===deptId);
       if(!dept) return;
-      const prev = dept.showGrandViews;
-      dept.showGrandViews = cb.checked;
+      const card = wrap.querySelector(`.dept-card[data-dept="${deptId}"]`);
+      const newName = card.querySelector('.dept-name-edit').value.trim() || dept.name;
+      const newShowGrandViews = card.querySelector('.dept-grand-views-edit').checked;
+      const prevName = dept.name, prevShowGrandViews = dept.showGrandViews;
+      dept.name = newName;
+      dept.showGrandViews = newShowGrandViews;
       const ok = await safeSet('departments', state.departments);
       if(ok){
-        showToast(cb.checked ? 'Grand views turned on' : 'Grand views turned off');
-        logAudit('department.grand_views_toggle', { name: dept.name, showGrandViews: cb.checked });
-        renderTeamSwitcher(); // Grand nav box visibility depends on this, for whichever team is currently active
+        showToast(`"${newName}" saved`);
+        logAudit('department.save', { name: newName, showGrandViews: newShowGrandViews });
+        renderTeamSwitcher(); // re-evaluates the Grand nav box for whichever team is currently active
+        renderDeptSetupCard();
       } else {
-        dept.showGrandViews = prev;
-        cb.checked = prev !== false;
+        dept.name = prevName;
+        dept.showGrandViews = prevShowGrandViews;
       }
     });
   });
