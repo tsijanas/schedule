@@ -569,6 +569,10 @@
       </div>
     </div>
 
+    <div class="sidebar-panel admin-only" id="departments-nav-box" style="display:none;">
+      <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
+    </div>
+
     <div class="sidebar-panel admin-only" id="grand-nav-box" style="display:none;">
       <div class="sidebar-section-label">Department-wide</div>
       <button class="nav-item admin-only" data-tab="grand" id="nav-grand">Grand Schedule</button>
@@ -593,7 +597,6 @@
     <div class="sidebar-panel admin-only">
       <button class="nav-item admin-only" data-tab="balance">Rotation balance</button>
       <button class="nav-item admin-only" data-tab="ideas">Ideas &amp; Bugs</button>
-      <button class="nav-item admin-only" data-tab="departments" id="nav-departments" style="display:none;">Departments</button>
       <button class="nav-item admin-only" data-tab="data">Data</button>
       <div class="sidebar-foot admin-only">Autosaves to the cloud when that's available — check the Data tab to back up or move your data manually otherwise.</div>
     </div>
@@ -613,6 +616,7 @@
       </div>
       <div class="card">
         <h3>Teams</h3>
+        <div class="muted" id="team-dept-hint" style="font-size:11.5px; margin-bottom:10px; display:none;">Which department a team belongs to is set from the Departments tab now, not here.</div>
         <div class="row" style="margin-bottom:14px;">
           <button class="btn secondary small" id="btn-add-team">+ Add team</button>
           <div class="spacer"></div>
@@ -1983,28 +1987,36 @@ function renderDeptSetupCard(){
     return;
   }
 
-  // "Move to…" needs every OTHER department plus a "No department" option, per team.
-  const deptOptionsHtml = (currentDeptId, teamId)=>{
-    let opts = `<option value="__none__">No department</option>`;
-    opts += state.departments.map(d=>`<option value="${d.id}" ${d.id===currentDeptId?'selected':''}>${escHtml(d.name)}</option>`).join('');
-    return `<select class="dept-team-move" data-team="${teamId}">${opts}</select>`;
+  const moveMenuHtml = (currentDeptId, teamId)=>{
+    const options = [{ id:'__none__', name:'No department' }, ...state.departments.filter(d=>d.id!==currentDeptId)];
+    return `<div class="dept-team-move-menu" data-team="${teamId}" style="display:none;">
+      ${options.map(o=>`<button type="button" class="dept-team-move-option" data-team="${teamId}" data-dept="${o.id}">${escHtml(o.name)}</button>`).join('')}
+    </div>`;
   };
+
+  const teamRowHtml = (dept, t)=> `<div class="dept-team-row" style="display:flex; align-items:center; padding:6px 4px; border-radius:6px; position:relative;">
+    <span style="font-size:13.5px;">${escHtml(t.name)}</span>
+    <div class="spacer"></div>
+    <button type="button" class="dept-team-move-btn" data-team="${t.id}" style="opacity:0; transition:opacity 0.15s; font-size:11.5px; font-weight:600; color:var(--ink-soft); background:none; border:none; cursor:pointer; text-decoration:underline;">Move ▾</button>
+    ${moveMenuHtml(dept ? dept.id : null, t.id)}
+  </div>`;
 
   const listHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
     <input type="text" class="dept-name-edit" data-dept="${dept.id}" value="${escAttr(dept.name)}" style="font-weight:700; font-size:14px; border:none; background:none; padding:0; width:100%; margin-bottom:8px;">
     <label class="chip-check" style="display:inline-flex; margin-bottom:10px;"><input type="checkbox" class="dept-grand-views-edit" data-dept="${dept.id}" ${dept.showGrandViews!==false?'checked':''}> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
-    <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:6px;">Teams</div>
+    <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">Teams</div>
     ${teamsIn(dept).length===0
-      ? `<div class="muted" style="font-size:12px;">No teams yet — add one from Team &amp; People's "+ Add team", or move one here below.</div>`
-      : teamsIn(dept).map(t=>`<div class="row" style="margin-bottom:6px;"><span style="font-size:13px;">${escHtml(t.name)}</span><div class="spacer"></div>${deptOptionsHtml(dept.id, t.id)}</div>`).join('')}
+      ? `<div class="muted" style="font-size:12px; margin-bottom:8px;">No teams yet.</div>`
+      : teamsIn(dept).map(t=>teamRowHtml(dept, t)).join('')}
+    <div class="row" style="margin-top:8px;"><button type="button" class="btn secondary small btn-new-team-in-dept" data-dept="${dept.id}">+ New team in this department</button></div>
   </div>`).join('');
 
   // Teams with no department at all — shown once, below every department card, each with its
-  // own "move to…" so it's easy to place stray/ungrouped teams without leaving this tab.
+  // own "move" so it's easy to place stray/ungrouped teams without leaving this tab.
   const ungroupedTeams = state.teams.filter(t=>!t.departmentId);
   const ungroupedHtml = ungroupedTeams.length>0 ? `<div style="border:1px dashed var(--line); border-radius:10px; padding:14px; margin-bottom:16px;">
     <div style="font-weight:700; font-size:13.5px; margin-bottom:8px;">Not in a department</div>
-    ${ungroupedTeams.map(t=>`<div class="row" style="margin-bottom:6px;"><span style="font-size:13px;">${escHtml(t.name)}</span><div class="spacer"></div>${deptOptionsHtml(null, t.id)}</div>`).join('')}
+    ${ungroupedTeams.map(t=>teamRowHtml(null, t)).join('')}
   </div>` : '';
 
   wrap.innerHTML = listHtml + ungroupedHtml + `
@@ -2019,6 +2031,14 @@ function renderDeptSetupCard(){
     <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward here, or from Team &amp; People's "+ Add team".</div>
     <div class="row" style="margin-top:14px;"><div class="spacer"></div><button class="btn small" id="btn-create-dept">Create department</button></div>
   `;
+  wrap.querySelectorAll('.dept-team-row').forEach(row=>{
+    row.addEventListener('mouseenter', ()=>{ row.querySelector('.dept-team-move-btn').style.opacity = '1'; });
+    row.addEventListener('mouseleave', ()=>{
+      if(!row.querySelector('.dept-team-move-menu').style.display || row.querySelector('.dept-team-move-menu').style.display==='none'){
+        row.querySelector('.dept-team-move-btn').style.opacity = '0';
+      }
+    });
+  });
   document.getElementById('btn-create-dept').addEventListener('click', async ()=>{
     const deptName = document.getElementById('dept-name-input').value.trim();
     if(!deptName){ showToast('Give the department a name first'); return; }
@@ -2069,11 +2089,21 @@ function renderDeptSetupCard(){
       }
     });
   });
-  wrap.querySelectorAll('.dept-team-move').forEach(sel=>{
-    sel.addEventListener('change', async ()=>{
-      const team = state.teams.find(t=>t.id===sel.dataset.team);
+  wrap.querySelectorAll('.dept-team-move-btn').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const menu = wrap.querySelector(`.dept-team-move-menu[data-team="${btn.dataset.team}"]`);
+      const wasOpen = menu.style.display !== 'none';
+      wrap.querySelectorAll('.dept-team-move-menu').forEach(m=> m.style.display='none');
+      wrap.querySelectorAll('.dept-team-move-btn').forEach(b=> b.style.opacity='0');
+      if(!wasOpen){ menu.style.display = 'block'; btn.style.opacity = '1'; }
+    });
+  });
+  wrap.querySelectorAll('.dept-team-move-option').forEach(opt=>{
+    opt.addEventListener('click', async ()=>{
+      const team = state.teams.find(t=>t.id===opt.dataset.team);
       if(!team) return;
-      const newDeptId = sel.value==='__none__' ? null : sel.value;
+      const newDeptId = opt.dataset.dept==='__none__' ? null : opt.dataset.dept;
       const prevDeptId = team.departmentId || null;
       if(newDeptId===prevDeptId) return;
       team.departmentId = newDeptId;
@@ -2087,6 +2117,19 @@ function renderDeptSetupCard(){
         team.departmentId = prevDeptId;
       }
       renderDeptSetupCard();
+    });
+  });
+  wrap.querySelectorAll('.btn-new-team-in-dept').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const deptId = btn.dataset.dept;
+      const id = 'team_'+Math.random().toString(36).slice(2,9);
+      state.teams.push({id, name:'New Team', managerId:null, departmentId:deptId});
+      state.tasksByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_TASKS));
+      state.reqByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_REQ));
+      const ok = await safeSet('teams', state.teams);
+      if(ok){ showToast('Team created'); logAudit('team.create', { departmentId: deptId }); }
+      renderDeptSetupCard();
+      renderTeamSwitcher();
     });
   });
 }
@@ -2818,7 +2861,7 @@ if(memberSearchInput && !memberSearchInput.dataset.wired){
 }
 async function renderGrandRegistryTab(){
   if(!ensureDepartmentSelected()){
-    document.getElementById('registry-list').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see Data → "Set up a department."</div>`;
+    document.getElementById('registry-list').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
     return;
   }
   document.getElementById('grand-registry-dept-name').textContent = departmentNameLine();
@@ -3145,6 +3188,9 @@ async function mergeMembers(keepId, absorbId){
 function renderTeamTab(){
   renderInvitesCard();
   renderStandardTasksByLevelCard();
+  const me = currentViewerMember();
+  const deptHint = document.getElementById('team-dept-hint');
+  if(deptHint) deptHint.style.display = (me && (me.role==='admin' || me.isAdmin===true)) ? 'block' : 'none';
   const wrap = document.getElementById('team-table-wrap');
   const label = document.getElementById('people-team-label');
   if(label){ const t = currentTeam(); label.textContent = t ? `— viewing ${t.name}` : ''; }
@@ -3885,10 +3931,6 @@ function renderTeamsList(){
         <option value="">— no manager set —</option>
         ${teamLeadOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
       </select>
-      <select class="team-department">
-        <option value="">— no department —</option>
-        ${state.departments.map(d=>`<option value="${d.id}" ${d.id===t.departmentId?'selected':''}>${escHtml(d.name)}</option>`).join('')}
-      </select>
       <span class="muted" style="font-size:12px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
       <div class="spacer"></div>
       <button class="btn secondary small btn-duplicate-team" title="Create a new team with the same tasks and weekly needs">Duplicate</button>
@@ -3990,8 +4032,7 @@ document.getElementById('btn-save-teams').addEventListener('click', async ()=>{
     const ti = +row.dataset.ti;
     const name = row.querySelector('.team-name').value.trim() || 'Untitled team';
     const managerId = row.querySelector('.team-manager').value || null;
-    const departmentId = row.querySelector('.team-department').value || null;
-    state.teams[ti] = {...state.teams[ti], name, managerId, departmentId};
+    state.teams[ti] = {...state.teams[ti], name, managerId};
   });
   const ok = await safeSet('teams', state.teams);
   if(ok){ showToast('Teams saved'); logAudit('team.save_all', { count: state.teams.length }); }
@@ -5035,7 +5076,7 @@ function departmentNameLine(){
 }
 async function renderGrandTab(){
   if(!ensureDepartmentSelected()){
-    document.getElementById('grand-sched-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see Data → "Set up a department."</div>`;
+    document.getElementById('grand-sched-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
     return;
   }
   if(!grandWeekMonday) grandWeekMonday = new Date(currentWeekMonday);
@@ -5050,7 +5091,7 @@ async function renderGrandTab(){
 }
 async function renderGrandReqPageTab(){
   if(!ensureDepartmentSelected()){
-    document.getElementById('grand-req-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see Data → "Set up a department."</div>`;
+    document.getElementById('grand-req-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
     return;
   }
   document.getElementById('grand-req-dept-name').textContent = departmentNameLine();
@@ -5063,7 +5104,7 @@ async function renderGrandReqPageTab(){
 }
 async function renderGrandBalancePageTab(){
   if(!ensureDepartmentSelected()){
-    document.getElementById('grand-balance-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see Data → "Set up a department."</div>`;
+    document.getElementById('grand-balance-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
     return;
   }
   document.getElementById('grand-balance-dept-name').textContent = departmentNameLine();
@@ -7405,11 +7446,11 @@ function updateWhosOnNavVisibility(){
 // UI generally, but never department creation/editing, so this needs its own runtime check
 // rather than just the existing admin-only CSS class (which doesn't distinguish the two roles).
 function updateDepartmentsNavVisibility(){
-  const nav = document.getElementById('nav-departments');
-  if(!nav) return;
+  const panel = document.getElementById('departments-nav-box');
+  if(!panel) return;
   const me = currentViewerMember();
   const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
-  nav.style.display = isOrgAdmin ? '' : 'none';
+  panel.style.display = isOrgAdmin ? '' : 'none';
 }
 let whosOnWeekMonday = null;
 async function renderWhosOnTab(){
