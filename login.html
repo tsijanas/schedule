@@ -3,7 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rota — Sign in</title>
+<title>Schedule — Sign in</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<meta name="theme-color" content="#FFE13B">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -63,7 +67,7 @@
 <div class="card">
   <div class="brand">
     <svg viewBox="0 0 50 30" xmlns="http://www.w3.org/2000/svg"><rect width="50" height="30" rx="6" fill="#004654"/><circle cx="15" cy="15" r="5" fill="#EDFFE9"/><circle cx="31" cy="15" r="5" fill="#FFE13B"/></svg>
-    <div class="brand-name">Rota</div>
+    <div class="brand-name">Schedule</div>
   </div>
 
   <h1 id="form-title">Sign in</h1>
@@ -71,8 +75,11 @@
 
   <form id="auth-form">
     <div id="name-field" style="display:none;">
-      <label for="f-name">Your name</label>
-      <input type="text" id="f-name" autocomplete="name" placeholder="Jamie Rivera">
+      <label for="f-first-name">First name</label>
+      <input type="text" id="f-first-name" autocomplete="given-name" placeholder="Jamie">
+      <label for="f-last-name" style="margin-top:10px;">Surname</label>
+      <input type="text" id="f-last-name" autocomplete="family-name" placeholder="Rivera">
+      <p style="font-size:11px; color:var(--ink-soft); margin:5px 0 0 0; line-height:1.4;">Make sure this is right — once your account's created, only a manager can change it.</p>
     </div>
     <label for="f-email">Email</label>
     <input type="email" id="f-email" autocomplete="email" required placeholder="you@company.com">
@@ -83,7 +90,7 @@
 
   <div class="error" id="form-error"></div>
 
-  <div class="switch">
+  <div class="switch" id="switch-row" style="display:none;">
     <span id="switch-text">New here?</span>
     <button type="button" id="btn-switch">Create an account</button>
   </div>
@@ -110,34 +117,77 @@
   const db = getFirestore(firebaseApp);
 
   // Already signed in? Skip straight to the app — index.html will sort out whether this
-  // account is approved yet or still needs to wait.
-  onAuthStateChanged(auth, (user)=>{ if(user) window.location.replace('index.html'); });
+  // account is approved yet or still needs to wait. Guarded during an active submission: a
+  // brand-new signup counts as "signed in" the instant the account is created, a full step
+  // before updateProfile has actually saved their name — if this listener redirected right
+  // then, it would sometimes beat that write to the server, and their typed name would be
+  // silently lost depending on network timing. The submit handler below does its own
+  // redirect once updateProfile has genuinely finished.
+  let formSubmitInProgress = false;
+  onAuthStateChanged(auth, (user)=>{ if(user && !formSubmitInProgress) window.location.replace('index.html'); });
 
   let mode = 'signin'; // or 'signup'
   const form = document.getElementById('auth-form');
   const nameField = document.getElementById('name-field');
-  const nameInput = document.getElementById('f-name');
+  const firstNameInput = document.getElementById('f-first-name');
+  const lastNameInput = document.getElementById('f-last-name');
   const emailInput = document.getElementById('f-email');
   const passwordInput = document.getElementById('f-password');
   const errorBox = document.getElementById('form-error');
   const submitBtn = document.getElementById('btn-submit');
 
+  // Arrived via an invite link? Two kinds: a personal link locks the email to exactly what
+  // the admin invited (typing it wrong would silently miss the auto-link and land the person
+  // in the normal pending-approval queue instead of straight on their schedule) — or a group
+  // link, sent to several people at once via one shared email, which can't lock anything but
+  // still needs to mark "this visit came from a real invite" so the signup form is reachable
+  // at all. Without either marker, there's no way to reach account creation from this page —
+  // this app is invite-only, not open signup.
+  const params = new URLSearchParams(window.location.search);
+  const inviteEmail = params.get('invite_email');
+  const inviteName = params.get('invite_name');
+  const isGroupInvite = params.get('invited')==='1';
+  let isInvite = false;
+  let isPersonalInvite = false;
+  if(inviteEmail){
+    isInvite = true;
+    isPersonalInvite = true;
+    emailInput.value = inviteEmail;
+    emailInput.readOnly = true;
+    emailInput.style.background = 'var(--paper)';
+    if(inviteName){
+      const parts = inviteName.trim().split(/\s+/);
+      firstNameInput.value = parts[0] || '';
+      lastNameInput.value = parts.slice(1).join(' ');
+    }
+  } else if(isGroupInvite){
+    isInvite = true;
+  }
+  if(isInvite) document.getElementById('switch-row').style.display = 'flex';
+
   function setMode(next){
     mode = next;
     const signup = mode === 'signup';
-    document.getElementById('form-title').textContent = signup ? 'Create your account' : 'Sign in';
+    document.getElementById('form-title').textContent = signup ? "You're invited — set a password" : 'Sign in';
     document.getElementById('form-sub').textContent = signup
-      ? "You'll get in right away, but an admin still needs to add you to a team before you can see the schedule."
+      ? (isPersonalInvite ? "You'll see your schedule right away — no waiting on approval." : "Sign up using the exact email your invite was sent to — you'll see your schedule right away, no waiting on approval.")
       : 'Enter your email and password to see your schedule.';
     nameField.style.display = signup ? 'block' : 'none';
-    nameInput.required = signup;
+    firstNameInput.required = signup;
+    lastNameInput.required = signup;
     passwordInput.setAttribute('autocomplete', signup ? 'new-password' : 'current-password');
     submitBtn.textContent = signup ? 'Create account' : 'Sign in';
     document.getElementById('switch-text').textContent = signup ? 'Already have an account?' : 'New here?';
     document.getElementById('btn-switch').textContent = signup ? 'Sign in instead' : 'Create an account';
     errorBox.classList.remove('show');
   }
-  document.getElementById('btn-switch').addEventListener('click', ()=> setMode(mode==='signup' ? 'signin' : 'signup'));
+  document.getElementById('btn-switch').addEventListener('click', ()=>{
+    // Switching back to sign-in is always fine. Switching *to* signup only makes sense if
+    // this visit actually came from an invite — otherwise there's nothing to switch to.
+    if(mode==='signin' && !isInvite) return;
+    setMode(mode==='signup' ? 'signin' : 'signup');
+  });
+  if(isInvite) setMode('signup');
 
   function friendlyError(code){
     const map = {
@@ -155,18 +205,24 @@
     e.preventDefault();
     errorBox.classList.remove('show');
     submitBtn.disabled = true;
+    formSubmitInProgress = true;
     const email = emailInput.value.trim();
     const password = passwordInput.value;
     try{
       if(mode === 'signup'){
-        const name = nameInput.value.trim();
+        const firstName = firstNameInput.value.trim();
+        const lastName = lastNameInput.value.trim();
+        if(!firstName || !lastName){
+          errorBox.textContent = 'Please enter both your first name and surname.';
+          errorBox.classList.add('show');
+          (firstName ? lastNameInput : firstNameInput).focus();
+          submitBtn.disabled = false;
+          formSubmitInProgress = false;
+          return;
+        }
+        const name = `${firstName} ${lastName}`;
         const cred = await createUserWithEmailAndPassword(auth, email, password);
-        if(name) await updateProfile(cred.user, { displayName: name });
-        // Record the signup request up front — index.html's access check will also do this
-        // as a fallback, but doing it here means the admin sees the right name immediately.
-        try{
-          await setDoc(doc(db, 'signup_requests', cred.user.uid), { name: name || email, email, createdAt: Date.now() });
-        }catch(err){ /* rules may reject this for a bootstrap-admin edge case; index.html handles it either way */ }
+        await updateProfile(cred.user, { displayName: name });
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
@@ -176,6 +232,7 @@
       errorBox.textContent = friendlyError(err.code);
       errorBox.classList.add('show');
       submitBtn.disabled = false;
+      formSubmitInProgress = false;
     }
   });
 </script>

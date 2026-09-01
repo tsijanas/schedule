@@ -16,6 +16,6 @@ COPY login.html /usr/share/nginx/html/login.html
 # Custom nginx config: sensible caching + basic security headers
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 80
+EXPOSE 3000
 
 # nginx's official image already runs the server as its entrypoint — nothing else to do.
