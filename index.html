@@ -6395,7 +6395,7 @@ function memberName(id){ const m=state.members.find(x=>x.id===id); return m?m.na
 // ambiguous. Reads straight from the existing full name — no separate field, nothing to migrate.
 function shortDisplayName(memberId, scopeMemberIds){
   const m = state.members.find(x=>x.id===memberId);
-  if(!m || !m.name) return m ? (m.name||'?') : '?';
+  if(!m || !m.name) return '(name pending)';
   const parts = m.name.trim().split(/\s+/).filter(Boolean);
   const firstName = parts[0] || m.name;
   if(parts.length < 2) return firstName; // no surname on file to disambiguate with anyway
