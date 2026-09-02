@@ -357,11 +357,13 @@
   .notif-pending-badge{ display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; padding:0 4px; border-radius:8px; background:var(--gold); color:var(--ink); font-size:10px; font-weight:700; margin-left:6px; }
   .notif-red-dot{ display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--brick-text); margin-left:6px; vertical-align:middle; }
   .notif-row{ display:flex; gap:12px; align-items:flex-start; padding:12px 14px; border:1px solid var(--line); border-radius:10px; margin-bottom:8px; background:var(--paper); }
-  .notif-row.unread{ background:var(--gold-soft); border-color:var(--gold); }
+  .notif-row.unread{ background:#FFF6D6; border-color:var(--gold); border-left:4px solid var(--gold); box-shadow:0 1px 3px rgba(192,147,42,0.18); }
   .notif-row-dot{ width:8px; height:8px; border-radius:50%; background:var(--gold); flex-shrink:0; margin-top:5px; }
+  .notif-row.unread .notif-row-dot{ width:10px; height:10px; box-shadow:0 0 0 3px rgba(255,225,59,0.35); }
   .notif-row-body{ flex:1; }
   .notif-row-title{ font-weight:700; font-size:13px; margin-bottom:2px; }
   .notif-row-message{ font-size:12.5px; color:var(--ink-soft); line-height:1.5; }
+  .notif-row.unread .notif-row-message{ color:var(--ink); font-weight:600; }
   .notif-row-time{ font-size:10.5px; color:var(--ink-faint); margin-top:4px; }
   .admin-toggle-row{
     display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:2px 0 14px 0;
@@ -558,6 +560,7 @@
       <div class="spacer"></div>
       <button class="btn small" id="name-confirm-submit">Continue</button>
     </div>
+    <div class="error" id="name-confirm-error" style="display:none; margin-top:12px; background:var(--brick-soft); color:var(--brick-text); border:1px solid var(--brick); border-radius:8px; padding:9px 11px; font-size:12.5px; font-weight:500;"></div>
   </div>
 </div>
 
@@ -1623,6 +1626,10 @@ const DAYS = ['mon','tue','wed','thu','fri','sat','sun'];
 const DAY_LABELS = {mon:'Monday',tue:'Tuesday',wed:'Wednesday',thu:'Thursday',fri:'Friday',sat:'Saturday',sun:'Sunday'};
 const DAY_SHORT = {mon:'MON',tue:'TUE',wed:'WED',thu:'THU',fri:'FRI',sat:'SAT',sun:'SUN'};
 const LEVELS = ['IC1','IC2','IC3']; // Manager is an access role now (see member.role), not a scheduling level
+// The generator's own fairness default when picking automatically — not a hard rule. The
+// manual add/replace path (canAssignNow, further down) deliberately does not enforce this,
+// so an admin can still knowingly place someone on a third task the same day if needed.
+const MAX_TASKS_PER_DAY = 2;
 
 const DEFAULT_TASKS = [
   {id:'example_task', name:'Example task', levels:[], excludes:null, notes:'This is an example — rename it, adjust its rules, or remove it and add your own.'},
@@ -2614,13 +2621,20 @@ function summarizeInstantCoverage(changes){
 function summarizeScheduleChanges(changes, teamId){
   const tasks = state.tasksByTeam[teamId] || [];
   const taskName = (tid)=> (tasks.find(t=>t.id===tid)||{}).name || 'a task';
-  const fmt = (c)=> `${taskName(c.taskId)} on ${fmtShortDate(c.dateISO)}`;
-  const added = changes.filter(c=>c.type==='added').map(fmt);
-  const removed = changes.filter(c=>c.type==='removed').map(fmt);
-  const parts = [];
-  if(added.length) parts.push(`Added: ${added.join(', ')}`);
-  if(removed.length) parts.push(`Removed: ${removed.join(', ')}`);
-  return parts.join('. ') || 'Your schedule was updated.';
+  const byDate = {};
+  changes.forEach(c=>{ (byDate[c.dateISO] = byDate[c.dateISO] || {added:[], removed:[]})[c.type].push(c.taskId); });
+  const lines = [];
+  Object.keys(byDate).sort().forEach(dateISO=>{
+    const { added, removed } = byDate[dateISO];
+    const dateLabel = fmtShortDate(dateISO);
+    if(added.length===1 && removed.length===1){
+      lines.push(`${taskName(removed[0])} → ${taskName(added[0])} on ${dateLabel}`);
+    } else {
+      added.forEach(tid=> lines.push(`Added ${taskName(tid)} on ${dateLabel}`));
+      removed.forEach(tid=> lines.push(`Removed ${taskName(tid)} on ${dateLabel}`));
+    }
+  });
+  return lines.join(' · ') || 'Your schedule was updated.';
 }
 // Stored under notifications/{memberId}/items/{notifId} — see firestore.rules for why a
 // subcollection was chosen over a flat filtered collection.
@@ -5164,6 +5178,46 @@ function departmentNameLine(){
   const dept = state.departments.find(d=>d.id===currentDepartmentId);
   return dept ? `Combined view across every team in ${escHtml(dept.name)}.` : 'Combined view across every team in this department.';
 }
+function renderGrandTaskSettingsPanel(g, panel){
+  // Teams may already disagree on these settings, since each is an independent copy unless
+  // linked — the first team's values are shown as a starting point; saving overwrites all of
+  // them with whatever's set here, same as any other "apply to all" action in this app.
+  const sample = g.perTeam[0].task;
+  panel.innerHTML = `
+    <div class="task-card-grid" style="padding:0 4px;">
+      <div class="field">
+        <label>Restricted to</label>
+        <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="grand-task-lvl-check" data-lvl="${l}" ${sample.levels&&sample.levels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
+      </div>
+      <div class="field">
+        <label>Also visible to</label>
+        <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="grand-task-visible-check" data-lvl="${l}" ${sample.visibleToLevels&&sample.visibleToLevels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
+      </div>
+      <div class="field">
+        <label>Scheduling</label>
+        <label class="same-week-toggle"><input type="checkbox" class="grand-task-same-week-check" ${sample.sameAllWeek?'checked':''}> Same person covers the whole week</label>
+      </div>
+    </div>
+    <div class="muted" style="font-size:11px; margin:8px 4px 0;">Applies to all ${g.perTeam.length} team${g.perTeam.length===1?'':'s'} sharing this task name — notes and "cannot combine with" stay local to each team, same as linked tasks elsewhere.</div>
+    <div class="row" style="margin-top:10px; padding:0 4px;"><div class="spacer"></div><button type="button" class="btn small btn-save-grand-task-settings">Save to all teams</button></div>
+  `;
+  panel.querySelector('.btn-save-grand-task-settings').addEventListener('click', async ()=>{
+    const levels = Array.from(panel.querySelectorAll('.grand-task-lvl-check:checked')).map(c=>c.dataset.lvl);
+    const visibleToLevels = Array.from(panel.querySelectorAll('.grand-task-visible-check:checked')).map(c=>c.dataset.lvl);
+    const sameAllWeek = panel.querySelector('.grand-task-same-week-check').checked;
+    const touchedTeamIds = new Set();
+    for(const {team, task} of g.perTeam){
+      task.levels = [...levels];
+      task.visibleToLevels = [...visibleToLevels];
+      task.sameAllWeek = sameAllWeek;
+      await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
+      touchedTeamIds.add(team.id);
+    }
+    logAudit('task.grand_settings_save', { name: g.displayName, teams: touchedTeamIds.size });
+    showToast(`Saved to ${touchedTeamIds.size} team${touchedTeamIds.size===1?'':'s'}`);
+    if(touchedTeamIds.has(currentTeamId)){ renderTasksTab(); renderReqTab(); }
+  });
+}
 async function renderGrandTasksTab(){
   const wrap = document.getElementById('grand-tasks-list');
   if(!ensureDepartmentSelected()){
@@ -5180,13 +5234,27 @@ async function renderGrandTasksTab(){
   wrap.innerHTML = names.map(key=>{
     const g = groups[key];
     const onAll = g.perTeam.length >= teamCount;
-    return `<div class="row" style="padding:9px 0; border-bottom:1px solid var(--line);">
-      <span style="font-weight:600; font-size:13.5px;">${escHtml(g.displayName)}</span>
-      <span class="muted" style="font-size:11.5px; margin-left:10px;">${onAll ? `on all ${teamCount} teams` : `on ${g.perTeam.length} of ${teamCount} teams`}</span>
-      <div class="spacer"></div>
-      <button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all teams</button>
+    return `<div class="grand-task-row" data-key="${escAttr(key)}" style="border-bottom:1px solid var(--line);">
+      <div class="row" style="padding:9px 0;">
+        <button type="button" class="req-breakdown-toggle btn-grand-task-settings-toggle" data-key="${escAttr(key)}" title="Edit settings">⚙</button>
+        <span style="font-weight:600; font-size:13.5px; margin-left:8px;">${escHtml(g.displayName)}</span>
+        <span class="muted" style="font-size:11.5px; margin-left:10px;">${onAll ? `on all ${teamCount} teams` : `on ${g.perTeam.length} of ${teamCount} teams`}</span>
+        <div class="spacer"></div>
+        <button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all teams</button>
+      </div>
+      <div class="grand-task-settings-panel" data-key="${escAttr(key)}" style="display:none; padding:0 0 14px 0;"></div>
     </div>`;
   }).join('');
+  wrap.querySelectorAll('.btn-grand-task-settings-toggle').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const key = btn.dataset.key;
+      const panel = wrap.querySelector(`.grand-task-settings-panel[data-key="${key}"]`);
+      const isOpen = panel.style.display !== 'none';
+      panel.style.display = isOpen ? 'none' : 'block';
+      btn.textContent = isOpen ? '⚙' : '⚙';
+      if(!isOpen) renderGrandTaskSettingsPanel(groups[key], panel);
+    });
+  });
   wrap.querySelectorAll('.btn-grand-remove-task').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const g = groups[btn.dataset.key];
@@ -6765,12 +6833,13 @@ function existingTasksForMemberOnDate(memberId, dateISO, schedule){
   return Object.keys(day).filter(tid => (day[tid]||[]).includes(memberId));
 }
 // Same exclusion rule as the generator: two tasks marked as excluding each other can
-// never both land on the same person the same day.
-const MAX_TASKS_PER_DAY = 2;
+// never both land on the same person the same day. Deliberately does NOT cap at
+// MAX_TASKS_PER_DAY the way the generator does — that's a fairness default for automatic
+// assignment, not a hard rule. A manual add should still let someone be placed on a third
+// (or more) task the same day if that's genuinely what's needed that day.
 function canAssignNow(member, task, dateISO, schedule){
   const existing = existingTasksForMemberOnDate(member.id, dateISO, schedule);
   if(existing.includes(task.id)) return false;
-  if(existing.length >= MAX_TASKS_PER_DAY) return false;
   if(task.excludes && existing.includes(task.excludes)) return false;
   const conflictsWithExisting = existing.some(tid=>{
     const et = state.tasks.find(t=>t.id===tid);
@@ -7438,6 +7507,7 @@ function showNameConfirmScreen(m, suggestedName){
     const modal = document.getElementById('name-confirm-modal');
     const firstInput = document.getElementById('name-confirm-first');
     const lastInput = document.getElementById('name-confirm-last');
+    const errorEl = document.getElementById('name-confirm-error');
     const parts = (suggestedName||'').trim().split(/\s+/).filter(Boolean);
     firstInput.value = parts[0] || '';
     lastInput.value = parts.slice(1).join(' ');
@@ -7452,13 +7522,28 @@ function showNameConfirmScreen(m, suggestedName){
         (first ? lastInput : firstInput).focus();
         return;
       }
+      if(errorEl) errorEl.style.display = 'none';
       submitBtn.disabled = true;
-      m.name = `${first} ${last}`;
-      await persistMembers();
-      modal.classList.remove('open');
-      submitBtn.disabled = false;
-      submitBtn.removeEventListener('click', onSubmit);
-      resolve();
+      submitBtn.textContent = 'Saving…';
+      const fullName = `${first} ${last}`;
+      try{
+        // Deliberately NOT persistMembers() here — that writes the whole member document via
+        // setDoc, and the rule permitting this exact write requires the diff to touch nothing
+        // but name. A dedicated, minimal updateDoc can never accidentally include another
+        // field, so it can't silently fail the same way a full-document write could.
+        const { db, doc, updateDoc } = window.rotaDb;
+        await updateDoc(doc(db, 'app_members', m.id), { name: fullName });
+        m.name = fullName;
+        membersSyncSnapshot.set(m.id, memberContentString(m)); // keep persistMembers' own change-detection in sync, so it doesn't try to re-write this same field later and hit the same rule
+        modal.classList.remove('open');
+        resolve();
+      }catch(e){
+        console.error('[name confirm] save failed:', e);
+        if(errorEl){ errorEl.textContent = "Couldn't save — please try again."; errorEl.style.display = 'block'; }
+      }finally{
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Continue';
+      }
     };
     submitBtn.addEventListener('click', onSubmit);
   });
