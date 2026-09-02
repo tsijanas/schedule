@@ -1173,7 +1173,7 @@ Sam Taylor	sam.taylor@company.com	IC3"></textarea>
       <label style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; display:block; margin-bottom:6px;">Team</label>
       <select id="invite-team-pick"></select>
     </div>
-    <div style="margin-top:14px;">
+    <div style="margin-top:14px;" id="invite-level-field">
       <label style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; display:block; margin-bottom:6px;">Level (default — a line can override this)</label>
       <div class="m-level-cell" id="invite-level-pick">
         <label class="chip-check"><input type="radio" name="invite-level" value="IC1" checked> IC1</label>
@@ -3714,6 +3714,13 @@ function parseInviteRows(text){
     })
     .filter(Boolean);
 }
+function updateInviteLevelFieldVisibility(){
+  const role = document.querySelector('input[name="invite-role"]:checked')?.value || '';
+  document.getElementById('invite-level-field').style.display = role ? 'none' : 'block';
+}
+document.querySelectorAll('input[name="invite-role"]').forEach(radio=>{
+  radio.addEventListener('change', updateInviteLevelFieldVisibility);
+});
 function openInviteModal(prefillText){
   document.getElementById('invite-emails-text').value = prefillText || '';
   const deptRow = document.getElementById('invite-dept-row');
@@ -3731,6 +3738,7 @@ function openInviteModal(prefillText){
   refreshInviteTeamOptions();
   document.querySelector('input[name="invite-level"][value="IC1"]').checked = true;
   document.querySelector('input[name="invite-role"][value=""]').checked = true;
+  updateInviteLevelFieldVisibility();
   updateInviteEmailsPreview();
   document.getElementById('invite-modal').classList.add('open');
   document.getElementById('invite-emails-text').focus();
@@ -3787,11 +3795,12 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
   const created = [];
   toCreate.forEach(row=>{
     const id = 'm_'+Math.random().toString(36).slice(2,9);
-    const level = row.level || defaultLevel;
+    const isViewer = !role;
+    const level = isViewer ? (row.level || defaultLevel) : null;
     state.members.push({
-      id, name: row.name || '', levels:[level],
+      id, name: row.name || '', levels: level ? [level] : [],
       isAdmin: role==='admin', role: role||null, managerDeptId,
-      teamId, eligibility: defaultEligibilityForTeamLevel(teamId, level)
+      teamId, eligibility: level ? defaultEligibilityForTeamLevel(teamId, level) : {}
     });
     created.push({ id, email: row.email });
   });
