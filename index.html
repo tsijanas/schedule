@@ -1995,9 +1995,8 @@ function renderDeptSetupCard(){
   };
 
   const teamRowHtml = (dept, t)=> `<div class="dept-team-row" style="display:flex; align-items:center; padding:6px 4px; border-radius:6px; position:relative;">
-    <span style="font-size:13.5px;">${escHtml(t.name)}</span>
-    <div class="spacer"></div>
-    <button type="button" class="dept-team-move-btn" data-team="${t.id}" style="opacity:0; transition:opacity 0.15s; font-size:11.5px; font-weight:600; color:var(--ink-soft); background:none; border:none; cursor:pointer; text-decoration:underline;">Move ▾</button>
+    <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
+    <button type="button" class="dept-team-move-btn" data-team="${t.id}" style="opacity:0; transition:opacity 0.15s; font-size:11.5px; font-weight:600; color:var(--ink-soft); background:none; border:none; cursor:pointer; text-decoration:underline; flex-shrink:0;">Move ▾</button>
     ${moveMenuHtml(dept ? dept.id : null, t.id)}
   </div>`;
 
@@ -2044,6 +2043,29 @@ function renderDeptSetupCard(){
       }
     });
   });
+  wrap.querySelectorAll('.dept-team-name-edit').forEach(inp=>{
+    const saveIfChanged = async ()=>{
+      const team = state.teams.find(t=>t.id===inp.dataset.team);
+      if(!team) return;
+      const newName = inp.value.trim();
+      if(!newName){ inp.value = team.name; return; } // never save a blank name — just revert
+      if(newName === team.name) return;
+      const oldName = team.name;
+      team.name = newName;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){
+        showToast(`Renamed to "${newName}"`);
+        logAudit('team.rename', { from: oldName, to: newName });
+        renderTeamSwitcher(); // team name shows there too (picker + Grand tab bars)
+      } else {
+        team.name = oldName;
+        inp.value = oldName;
+      }
+    };
+    inp.addEventListener('blur', saveIfChanged);
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
+    inp.addEventListener('click', e=> e.stopPropagation());
+  });
   document.getElementById('btn-create-dept').addEventListener('click', async ()=>{
     const deptName = document.getElementById('dept-name-input').value.trim();
     if(!deptName){ showToast('Give the department a name first'); return; }
@@ -2078,7 +2100,15 @@ function renderDeptSetupCard(){
       if(ok){
         showToast(`"${newName}" saved`);
         logAudit('department.save', { name: newName, showGrandViews: newShowGrandViews });
-        renderTeamSwitcher(); // re-evaluates the Grand nav box for whichever team is currently active
+        // If you're not currently viewing a team in this department, the Grand nav box change
+        // wouldn't be visible at all — switch you into one so the effect is obvious immediately,
+        // rather than requiring you to know you need to navigate there yourself to see it.
+        const currentTeamInThisDept = state.teams.find(t=>t.id===currentTeamId)?.departmentId === deptId;
+        if(!currentTeamInThisDept){
+          const teamHere = state.teams.find(t=>t.departmentId===deptId);
+          if(teamHere) await switchTeam(teamHere.id);
+        }
+        renderTeamSwitcher();
         renderDeptSetupCard();
       } else {
         dept.name = prevName;
@@ -2124,9 +2154,11 @@ function renderDeptSetupCard(){
       state.tasksByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_TASKS));
       state.reqByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_REQ));
       const ok = await safeSet('teams', state.teams);
-      if(ok){ showToast('Team created'); logAudit('team.create', { departmentId: deptId }); }
+      if(ok){ logAudit('team.create', { departmentId: deptId }); }
       renderDeptSetupCard();
       renderTeamSwitcher();
+      const newInput = document.querySelector(`.dept-team-name-edit[data-team="${id}"]`);
+      if(newInput){ newInput.focus(); newInput.select(); }
     });
   });
 }
