@@ -595,6 +595,7 @@
     <div class="sidebar-panel admin-only" id="grand-nav-box" style="display:none;">
       <div class="sidebar-section-label">Department-wide</div>
       <button class="nav-item admin-only" data-tab="grand" id="nav-grand">Grand Schedule</button>
+      <button class="nav-item admin-only" data-tab="grand-tasks" id="nav-grand-tasks">Grand Tasks</button>
       <button class="nav-item admin-only" data-tab="grand-req" id="nav-grand-req">Grand Requirement</button>
       <button class="nav-item admin-only" data-tab="grand-balance" id="nav-grand-balance">Grand Rotation Balance</button>
       <button class="nav-item admin-only" data-tab="grand-registry" id="nav-grand-registry">Grand Registry</button>
@@ -795,7 +796,6 @@
           <span class="muted" id="grand-sched-status"></span>
           <button class="btn secondary small" id="btn-grand-replace-search">Replace someone this week</button>
           <button class="btn secondary small" id="btn-grand-send-notifications">Send notifications<span class="notif-pending-badge" id="grand-notif-badge" style="display:none;"></span></button>
-          <button class="btn secondary small" id="btn-grand-new-task">+ New task for all teams</button>
           <button class="btn secondary small" id="btn-grand-clear">Clear</button>
           <button class="btn secondary small" id="btn-grand-fill-in">Fill in</button>
           <button class="btn secondary small" id="btn-grand-update-sched">Update</button>
@@ -805,6 +805,25 @@
       <div class="card" style="overflow-x:auto;">
         <div class="hint">Every team in this department, stacked together, for the week above — click any name or the + to add, replace, or remove someone, exactly like a normal team's Schedule tab. Changes here are the same real data each team sees in their own Schedule tab, not a copy.</div>
         <div id="grand-sched-wrap"></div>
+      </div>
+    </div>
+
+    <!-- GRAND TASKS TAB -->
+    <div class="tab-panel" id="tab-grand-tasks">
+      <div class="page-head">
+        <h1>Grand Tasks</h1>
+        <p>Add a task to every team in this department at once, or remove one from all of them together.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="spacer"></div>
+          <button class="btn small" id="btn-grand-new-task">+ New task for all teams</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Shared across this department</h3>
+        <div class="hint">Task names that already exist on more than one team here — each still an independent copy per team (unless linked), same as anywhere else in the app.</div>
+        <div id="grand-tasks-list"></div>
       </div>
     </div>
 
@@ -2754,6 +2773,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='departments'){ renderDeptSetupCard(); }
     if(btn.dataset.tab==='ideas') renderIdeasTab();
     if(btn.dataset.tab==='grand') renderGrandTab();
+    if(btn.dataset.tab==='grand-tasks') renderGrandTasksTab();
     if(btn.dataset.tab==='grand-req') renderGrandReqPageTab();
     if(btn.dataset.tab==='grand-balance') renderGrandBalancePageTab();
   });
@@ -5143,6 +5163,69 @@ function ensureDepartmentSelected(){
 function departmentNameLine(){
   const dept = state.departments.find(d=>d.id===currentDepartmentId);
   return dept ? `Combined view across every team in ${escHtml(dept.name)}.` : 'Combined view across every team in this department.';
+}
+async function renderGrandTasksTab(){
+  const wrap = document.getElementById('grand-tasks-list');
+  if(!ensureDepartmentSelected()){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
+    return;
+  }
+  const groups = grandTaskGroups(currentDepartmentId);
+  const names = Object.keys(groups).sort();
+  if(names.length===0){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No tasks on any team in this department yet.</div>`;
+    return;
+  }
+  const teamCount = teamsInDepartment(currentDepartmentId).length;
+  wrap.innerHTML = names.map(key=>{
+    const g = groups[key];
+    const onAll = g.perTeam.length >= teamCount;
+    return `<div class="row" style="padding:9px 0; border-bottom:1px solid var(--line);">
+      <span style="font-weight:600; font-size:13.5px;">${escHtml(g.displayName)}</span>
+      <span class="muted" style="font-size:11.5px; margin-left:10px;">${onAll ? `on all ${teamCount} teams` : `on ${g.perTeam.length} of ${teamCount} teams`}</span>
+      <div class="spacer"></div>
+      <button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all teams</button>
+    </div>`;
+  }).join('');
+  wrap.querySelectorAll('.btn-grand-remove-task').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const g = groups[btn.dataset.key];
+      if(!g) return;
+      askConfirm(`Remove "${g.displayName}" from ${g.perTeam.length} team${g.perTeam.length===1?'':'s'}? This deletes it and its weekly needs on each — any days already scheduled with it get cleared too, on every affected team.`, 'Remove from all teams', async ()=>{
+        const snapshot = g.perTeam.map(({team, task})=>({
+          teamId: team.id,
+          tasks: JSON.parse(JSON.stringify(state.tasksByTeam[team.id]||[])),
+          req: JSON.parse(JSON.stringify(state.reqByTeam[team.id]||{})),
+          reqLevels: JSON.parse(JSON.stringify(state.reqLevelsByTeam[team.id]||{})),
+        }));
+        for(const {team, task} of g.perTeam){
+          state.tasksByTeam[team.id] = (state.tasksByTeam[team.id]||[]).filter(t=>t.id!==task.id);
+          if(state.reqByTeam[team.id]) delete state.reqByTeam[team.id][task.id];
+          if(state.reqLevelsByTeam[team.id]) delete state.reqLevelsByTeam[team.id][task.id];
+          await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
+          await safeSet('weekly_req_'+team.id, state.reqByTeam[team.id]||{}, true);
+          await safeSet('weekly_req_levels_'+team.id, state.reqLevelsByTeam[team.id]||{}, true);
+        }
+        logAudit('task.grand_remove', { name: g.displayName, teams: g.perTeam.length });
+        pushUndo(async ()=>{
+          for(const s of snapshot){
+            state.tasksByTeam[s.teamId] = s.tasks;
+            state.reqByTeam[s.teamId] = s.req;
+            state.reqLevelsByTeam[s.teamId] = s.reqLevels;
+            await safeSet('tasks_'+s.teamId, s.tasks, true);
+            await safeSet('weekly_req_'+s.teamId, s.req, true);
+            await safeSet('weekly_req_levels_'+s.teamId, s.reqLevels, true);
+          }
+          if(state.teams.some(t=>t.id===currentTeamId)){ renderTasksTab(); renderReqTab(); }
+          renderGrandTasksTab();
+          showToast('Restored');
+        });
+        if(state.teams.some(t=>t.id===currentTeamId)){ renderTasksTab(); renderReqTab(); }
+        renderGrandTasksTab();
+        showToast(`Removed "${g.displayName}" from ${g.perTeam.length} team${g.perTeam.length===1?'':'s'}`, undoLast);
+      });
+    });
+  });
 }
 async function renderGrandTab(){
   if(!ensureDepartmentSelected()){
