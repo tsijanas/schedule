@@ -542,6 +542,25 @@
 
 <div id="boot-cover"><div class="boot-spinner" aria-label="Loading" role="status"></div></div>
 
+<div class="identity-modal" id="name-confirm-modal" style="z-index:1001;">
+  <div class="identity-card" style="max-width:400px;">
+    <h2>What's your name?</h2>
+    <p class="muted" style="margin:4px 0 14px 0; font-size:12.5px;">Shown to your team on the schedule. Only a manager can change it after this.</p>
+    <div class="field">
+      <label>First name</label>
+      <input type="text" id="name-confirm-first" autocomplete="given-name" placeholder="Jamie">
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label>Surname</label>
+      <input type="text" id="name-confirm-last" autocomplete="family-name" placeholder="Rivera">
+    </div>
+    <div class="row" style="margin-top:18px;">
+      <div class="spacer"></div>
+      <button class="btn small" id="name-confirm-submit">Continue</button>
+    </div>
+  </div>
+</div>
+
 <div class="app mode-viewer" id="app-root">
   <div class="sidebar" id="sidebar">
     <div class="sidebar-panel">
@@ -1482,35 +1501,51 @@ window.rotaReady = (async function boot(){
       const idxKey = normalizedEmail.replace(/\//g, '_SLASH_');
       console.log('[invite check] looking up email_index for:', JSON.stringify(normalizedEmail));
       const idxSnap = await getDoc(doc(db, 'email_index', idxKey));
-      let unclaimedId = null;
+      let matchedId = null, alreadyMine = false;
       if(idxSnap.exists()){
         const candidateId = idxSnap.data().memberId;
         console.log('[invite check] email_index points to member:', candidateId);
         const contactSnap = await getDoc(doc(db, 'member_contacts', candidateId));
         if(contactSnap.exists()){
           console.log('[invite check] that member_contacts record:', JSON.stringify(contactSnap.data()));
-          if(!contactSnap.data().authUid) unclaimedId = candidateId;
+          const existingAuthUid = contactSnap.data().authUid;
+          if(!existingAuthUid){ matchedId = candidateId; }
+          // Already claimed by this exact person, from an earlier session — this is the repair
+          // path for anyone caught mid-way by the bug this whole block used to have (claim
+          // succeeded, but never got added to the approved list, so every login after the
+          // first one failed). Recognizing this lets them self-heal automatically here, on
+          // their next login, rather than needing a manual database fix.
+          else if(existingAuthUid === user.uid){ matchedId = candidateId; alreadyMine = true; }
         } else {
           console.log('[invite check] email_index pointed at a member_contacts record that no longer exists');
         }
       } else {
         console.log('[invite check] no email_index entry for this email — nobody invited it');
       }
-      console.log('[invite check] unclaimed record chosen:', unclaimedId || '(none — falling through to pending queue)');
-      if(unclaimedId){
-        await setDoc(doc(db,'member_contacts', unclaimedId), { email:normalizedEmail, authUid:user.uid });
-        await setDoc(doc(db,'claimed_links', user.uid), { memberId: unclaimedId });
-        await deleteDoc(doc(db, 'signup_requests', user.uid)).catch(()=>{});
-        // Email-only invite (no name assigned yet) — use the name they just typed at signup.
-        if(user.displayName){
-          try{
-            const memberRef = doc(db, 'app_members', unclaimedId);
-            const memberSnap = await getDoc(memberRef);
-            if(memberSnap.exists() && (!memberSnap.data().name || memberSnap.data().name.trim()==='')){
-              await updateDoc(memberRef, { name: user.displayName });
-            }
-          }catch(e){ console.warn('Could not set name from signup (non-fatal)', e); }
+      console.log('[invite check] matched record:', matchedId || '(none — falling through to pending queue)', alreadyMine ? '(already theirs — repairing)' : '');
+      if(matchedId){
+        if(!alreadyMine){
+          // Fresh claim — member_contacts only permits this self-claim write while authUid is
+          // still null, and claimed_links can never be re-written once created, so both of
+          // these must only run the first time, never during a repair of an already-claimed one.
+          await setDoc(doc(db,'member_contacts', matchedId), { email:normalizedEmail, authUid:user.uid });
+          await setDoc(doc(db,'claimed_links', user.uid), { memberId: matchedId });
+          // Name is deliberately left blank here, even though Google already handed us a
+          // displayName — the boot sequence shows an explicit "confirm your name" screen the
+          // first time someone lands with a blank name, pre-filled with Google's name as a
+          // suggestion but requiring an actual confirm, rather than silently trusting whatever
+          // Google's account name happens to be (nicknames, wrong order, etc. are common).
         }
+        // The actual fix, either way: without this, every login after the first one used to
+        // fail — approvedUids never contained this uid, and by the second login authUid was
+        // already set, so the "still unclaimed" branch above no longer matched them either.
+        // Both paths back to "approved" closed at once, and the person got told they were
+        // never invited. claimed_links existing (just written above, or already there from
+        // before) is enough on its own to make isApproved() — and so this update — permitted.
+        if(!approvedUids.includes(user.uid)){
+          await updateDoc(approvedRef, { uids: arrayUnion(user.uid) });
+        }
+        await deleteDoc(doc(db, 'signup_requests', user.uid)).catch(()=>{});
         return { status:'approved', bootstrap:false, uid:user.uid, email:user.email, name:user.displayName||user.email };
       }
     }catch(e){ console.error('[invite check] the lookup or claim itself failed:', e); }
@@ -1987,17 +2022,16 @@ function renderDeptSetupCard(){
     return;
   }
 
-  const moveMenuHtml = (currentDeptId, teamId)=>{
-    const options = [{ id:'__none__', name:'No department' }, ...state.departments.filter(d=>d.id!==currentDeptId)];
-    return `<div class="dept-team-move-menu" data-team="${teamId}" style="display:none;">
-      ${options.map(o=>`<button type="button" class="dept-team-move-option" data-team="${teamId}" data-dept="${o.id}">${escHtml(o.name)}</button>`).join('')}
-    </div>`;
+  const moveSelectHtml = (currentDeptId, teamId)=>{
+    let opts = `<option value="__none__">No department</option>`;
+    opts += state.departments.map(d=>`<option value="${d.id}" ${d.id===currentDeptId?'selected':''}>${escHtml(d.name)}</option>`).join('');
+    return `<label style="font-size:11px; color:var(--ink-soft); display:flex; align-items:center; gap:5px; flex-shrink:0;">Move to: <select class="dept-team-move-select" data-team="${teamId}">${opts}</select></label>`;
   };
 
-  const teamRowHtml = (dept, t)=> `<div class="dept-team-row" style="display:flex; align-items:center; padding:6px 4px; border-radius:6px; position:relative;">
+  const teamRowHtml = (dept, t)=> `<div class="dept-team-row" data-team="${t.id}" style="display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px;">
     <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
-    <button type="button" class="dept-team-move-btn" data-team="${t.id}" style="opacity:0; transition:opacity 0.15s; font-size:11.5px; font-weight:600; color:var(--ink-soft); background:none; border:none; cursor:pointer; text-decoration:underline; flex-shrink:0;">Move ▾</button>
-    ${moveMenuHtml(dept ? dept.id : null, t.id)}
+    ${moveSelectHtml(dept ? dept.id : '__none__', t.id)}
+    <button type="button" class="btn-remove-x dept-team-remove-btn" data-team="${t.id}" title="Remove team">×</button>
   </div>`;
 
   const listHtml = state.departments.map(dept=> `<div class="dept-card" data-dept="${dept.id}" style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
@@ -2035,14 +2069,6 @@ function renderDeptSetupCard(){
     <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward here, or from Team &amp; People's "+ Add team".</div>
     <div class="row" style="margin-top:14px;"><div class="spacer"></div><button class="btn small" id="btn-create-dept">Create department</button></div>
   `;
-  wrap.querySelectorAll('.dept-team-row').forEach(row=>{
-    row.addEventListener('mouseenter', ()=>{ row.querySelector('.dept-team-move-btn').style.opacity = '1'; });
-    row.addEventListener('mouseleave', ()=>{
-      if(!row.querySelector('.dept-team-move-menu').style.display || row.querySelector('.dept-team-move-menu').style.display==='none'){
-        row.querySelector('.dept-team-move-btn').style.opacity = '0';
-      }
-    });
-  });
   wrap.querySelectorAll('.dept-team-name-edit').forEach(inp=>{
     const saveIfChanged = async ()=>{
       const team = state.teams.find(t=>t.id===inp.dataset.team);
@@ -2116,21 +2142,11 @@ function renderDeptSetupCard(){
       }
     });
   });
-  wrap.querySelectorAll('.dept-team-move-btn').forEach(btn=>{
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      const menu = wrap.querySelector(`.dept-team-move-menu[data-team="${btn.dataset.team}"]`);
-      const wasOpen = menu.style.display !== 'none';
-      wrap.querySelectorAll('.dept-team-move-menu').forEach(m=> m.style.display='none');
-      wrap.querySelectorAll('.dept-team-move-btn').forEach(b=> b.style.opacity='0');
-      if(!wasOpen){ menu.style.display = 'block'; btn.style.opacity = '1'; }
-    });
-  });
-  wrap.querySelectorAll('.dept-team-move-option').forEach(opt=>{
-    opt.addEventListener('click', async ()=>{
-      const team = state.teams.find(t=>t.id===opt.dataset.team);
+  wrap.querySelectorAll('.dept-team-move-select').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const team = state.teams.find(t=>t.id===sel.dataset.team);
       if(!team) return;
-      const newDeptId = opt.dataset.dept==='__none__' ? null : opt.dataset.dept;
+      const newDeptId = sel.value==='__none__' ? null : sel.value;
       const prevDeptId = team.departmentId || null;
       if(newDeptId===prevDeptId) return;
       team.departmentId = newDeptId;
@@ -2145,6 +2161,9 @@ function renderDeptSetupCard(){
       }
       renderDeptSetupCard();
     });
+  });
+  wrap.querySelectorAll('.dept-team-remove-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=> removeTeamEntirely(btn.dataset.team));
   });
   wrap.querySelectorAll('.btn-new-team-in-dept').forEach(btn=>{
     btn.addEventListener('click', async ()=>{
@@ -3941,6 +3960,41 @@ async function renderOrgTab(){
   renderTeamTab();
   await renderUnassignedList();
 }
+// Shared by both Teams & People's own "Remove" and the Departments tab's per-team "Remove" —
+// keyed by teamId rather than a row index so either UI can call it the same way.
+async function removeTeamEntirely(teamId){
+  const team = state.teams.find(t=>t.id===teamId);
+  if(!team) return;
+  if(state.members.some(m=>m.teamId===teamId)){ showToast('Move everyone off this team before removing it'); return; }
+  if(state.teams.length<=1){ showToast('You need at least one team'); return; }
+  askConfirm(`Remove the team "${team.name}"? Its tasks and weekly needs go with it.`, 'Remove', async ()=>{
+    const insertAt = state.teams.findIndex(t=>t.id===teamId);
+    const teamSnapshot = JSON.parse(JSON.stringify(team));
+    const tasksSnapshot = JSON.parse(JSON.stringify(state.tasksByTeam[teamId]||[]));
+    const reqSnapshot = JSON.parse(JSON.stringify(state.reqByTeam[teamId]||{}));
+    state.teams.splice(insertAt,1);
+    delete state.tasksByTeam[teamId];
+    delete state.reqByTeam[teamId];
+    delete state.schedulesByTeam[teamId];
+    const ok = await safeSet('teams', state.teams);
+    if(ok) logAudit('team.remove', { name: team.name });
+    if(currentTeamId===teamId) await switchTeam(state.teams[0].id);
+    renderTeamsList();
+    renderTeamSwitcher();
+    renderDeptSetupCard();
+    pushUndo(async ()=>{
+      state.teams.splice(insertAt, 0, teamSnapshot);
+      state.tasksByTeam[teamId] = tasksSnapshot;
+      state.reqByTeam[teamId] = reqSnapshot;
+      await safeSet('teams', state.teams, true);
+      await safeSet('tasks_'+teamId, tasksSnapshot, true);
+      await safeSet('weekly_req_'+teamId, reqSnapshot, true);
+      renderTeamsList(); renderTeamSwitcher(); renderDeptSetupCard();
+      showToast('Restored');
+    });
+    if(ok) showToast('Team removed', undoLast);
+  });
+}
 function renderTeamsList(){
   const wrap = document.getElementById('teams-list');
   const teamLeadOptions = state.members;
@@ -4013,36 +4067,8 @@ function renderTeamsList(){
   wrap.querySelectorAll('.btn-del-team').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const row = btn.closest('[data-ti]');
-      const ti = +row.dataset.ti;
-      const team = state.teams[ti];
-      if(state.members.some(m=>m.teamId===team.id)){ showToast('Move everyone off this team before removing it'); return; }
-      if(state.teams.length<=1){ showToast('You need at least one team'); return; }
-      askConfirm(`Remove the team "${team.name}"? Its tasks and weekly needs go with it.`, 'Remove', async ()=>{
-        const teamSnapshot = JSON.parse(JSON.stringify(team));
-        const tasksSnapshot = JSON.parse(JSON.stringify(state.tasksByTeam[team.id]||[]));
-        const reqSnapshot = JSON.parse(JSON.stringify(state.reqByTeam[team.id]||{}));
-        const insertAt = ti;
-        state.teams.splice(ti,1);
-        delete state.tasksByTeam[team.id];
-        delete state.reqByTeam[team.id];
-        delete state.schedulesByTeam[team.id];
-        const ok = await safeSet('teams', state.teams);
-        if(ok) logAudit('team.remove', { name: team.name });
-        if(currentTeamId===team.id) await switchTeam(state.teams[0].id);
-        renderTeamsList();
-        renderTeamSwitcher();
-        pushUndo(async ()=>{
-          state.teams.splice(insertAt, 0, teamSnapshot);
-          state.tasksByTeam[team.id] = tasksSnapshot;
-          state.reqByTeam[team.id] = reqSnapshot;
-          await safeSet('teams', state.teams, true);
-          await safeSet('tasks_'+team.id, tasksSnapshot, true);
-          await safeSet('weekly_req_'+team.id, reqSnapshot, true);
-          renderTeamsList(); renderTeamSwitcher();
-          showToast('Restored');
-        });
-        if(ok) showToast('Team removed', undoLast);
-      });
+      const team = state.teams[+row.dataset.ti];
+      if(team) removeTeamEntirely(team.id);
     });
   });
 }
@@ -7304,6 +7330,41 @@ document.getElementById('btn-pending-signout').addEventListener('click', ()=>{ w
 document.getElementById('btn-pending-refresh').addEventListener('click', ()=>{ window.location.reload(); });
 document.getElementById('btn-change-identity').addEventListener('click', ()=>{ window.rotaAuth.signOut(); });
 
+// Shown once, the first time someone lands with a blank name — pre-filled with whatever
+// Google's account provided as a starting suggestion, but requires an actual confirm rather
+// than silently trusting it (nicknames, wrong order, etc. are common on real Google accounts).
+// Returns a promise that resolves once they've submitted, so bindIdentityToMember can await
+// it and only proceed to the real app afterward.
+function showNameConfirmScreen(m, suggestedName){
+  return new Promise(resolve=>{
+    const modal = document.getElementById('name-confirm-modal');
+    const firstInput = document.getElementById('name-confirm-first');
+    const lastInput = document.getElementById('name-confirm-last');
+    const parts = (suggestedName||'').trim().split(/\s+/).filter(Boolean);
+    firstInput.value = parts[0] || '';
+    lastInput.value = parts.slice(1).join(' ');
+    modal.classList.add('open');
+    firstInput.focus();
+    if(firstInput.value) firstInput.select();
+    const submitBtn = document.getElementById('name-confirm-submit');
+    const onSubmit = async ()=>{
+      const first = firstInput.value.trim();
+      const last = lastInput.value.trim();
+      if(!first || !last){
+        (first ? lastInput : firstInput).focus();
+        return;
+      }
+      submitBtn.disabled = true;
+      m.name = `${first} ${last}`;
+      await persistMembers();
+      modal.classList.remove('open');
+      submitBtn.disabled = false;
+      submitBtn.removeEventListener('click', onSubmit);
+      resolve();
+    };
+    submitBtn.addEventListener('click', onSubmit);
+  });
+}
 async function bindIdentityToMember(info){
   let mid = await findMemberIdByUid(info.uid);
   let m = mid ? state.members.find(x=>x.id===mid) : null;
@@ -7321,7 +7382,7 @@ async function bindIdentityToMember(info){
       // managers list before the writes below, since the rules require it to already be true
     const id = 'm_'+Math.random().toString(36).slice(2,9);
     m = {
-      id, name: info.name || info.email,
+      id, name: '',
       levels: [],
       isAdmin: !!(info.bootstrap || info.owner),
       role: (info.bootstrap || info.owner) ? 'admin' : null,
@@ -7342,6 +7403,9 @@ async function bindIdentityToMember(info){
     if(!m.teamId || !state.teams.some(t=>t.id===m.teamId)){ m.teamId = state.teams[0]?.id || null; changed = true; }
     if(changed) await persistMembers();
     await saveContact(m.id, info.email, info.uid);
+  }
+  if(!m.name || m.name.trim()===''){
+    await showNameConfirmScreen(m, info.name);
   }
   viewerIdentityId = m.id;
   currentAuthUid = info.uid;
