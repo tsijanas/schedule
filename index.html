@@ -3936,6 +3936,7 @@ document.getElementById('dept-switch-select').addEventListener('change', (e)=>{
   currentDepartmentId = e.target.value;
   const teamsHere = teamsInDepartment(currentDepartmentId);
   if(teamsHere.length>0) switchTeam(teamsHere[0].id); else renderTeamSwitcher();
+  renderTeamsList();
 });
 document.getElementById('team-switch-select').addEventListener('change', (e)=>{ switchTeam(e.target.value); });
 // Switching teams swaps what state.tasks/state.req/state.schedules point to (see the
@@ -4007,8 +4008,13 @@ async function removeTeamEntirely(teamId){
 function renderTeamsList(){
   const wrap = document.getElementById('teams-list');
   const teamLeadOptions = state.members;
+  const scopeToCurrentDept = state.departments.length > 0 && currentDepartmentId;
   let html = '';
   state.teams.forEach((t,ti)=>{
+    if(scopeToCurrentDept){
+      const inScope = currentDepartmentId==='__ungrouped__' ? !t.departmentId : t.departmentId===currentDepartmentId;
+      if(!inScope) return; // real array index (ti) stays correct for the rows that do render
+    }
     const count = state.members.filter(m=>m.teamId===t.id).length;
     const tc = colorForTeam(t.id);
     html += `<div class="team-row" data-ti="${ti}">
