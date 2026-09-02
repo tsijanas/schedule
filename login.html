@@ -139,7 +139,11 @@
     }catch(err){
       console.error(err);
       const msg = friendlyError(err.code);
-      if(msg){ errorBox.textContent = msg; errorBox.classList.add('show'); }
+      if(msg){
+        const knownCode = err.code in {'auth/popup-blocked':1,'auth/network-request-failed':1};
+        errorBox.textContent = knownCode ? msg : `${msg} (${err.code || 'unknown error'})`;
+        errorBox.classList.add('show');
+      }
       googleBtn.disabled = false;
       googleLabel.textContent = 'Sign in with Google';
     }
