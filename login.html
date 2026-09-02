@@ -26,7 +26,7 @@
   }
   h1,.serif{ font-family:'Fraunces',Georgia,serif; }
   button{ font-family:inherit; cursor:pointer; }
-  input:focus-visible, button:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
+  button:focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
 
   .card{
     background:var(--paper); border:1px solid var(--line); border-radius:var(--radius);
@@ -39,21 +39,14 @@
   h1{ font-size:20px; margin:0 0 4px 0; font-weight:600; }
   .sub{ color:var(--ink-soft); font-size:12.5px; margin:0 0 22px 0; line-height:1.5; }
 
-  label{ display:block; font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); margin:14px 0 5px 0; }
-  input[type=text], input[type=email], input[type=password]{
-    width:100%; font-family:inherit; font-size:14px; padding:9px 11px; border:1px solid var(--line);
-    border-radius:8px; background:#fff; color:var(--ink);
+  .btn-google{
+    width:100%; margin-top:6px; padding:11px 14px; border-radius:10px; border:1px solid var(--line);
+    background:#fff; color:var(--ink); font-weight:600; font-size:13.5px;
+    display:flex; align-items:center; justify-content:center; gap:10px;
   }
-
-  .btn{
-    width:100%; margin-top:20px; padding:10px 14px; border-radius:10px; border:none;
-    background:var(--ink); color:var(--sidebar-ink); font-weight:600; font-size:13.5px;
-  }
-  .btn:hover{ background:#00323c; }
-  .btn:disabled{ opacity:0.6; cursor:default; }
-
-  .switch{ margin-top:16px; text-align:center; font-size:12.5px; color:var(--ink-soft); }
-  .switch button{ background:none; border:none; color:var(--ink); font-weight:600; text-decoration:underline; padding:0; font-size:12.5px; }
+  .btn-google:hover{ background:var(--paper); }
+  .btn-google:disabled{ opacity:0.6; cursor:default; }
+  .btn-google svg{ width:18px; height:18px; flex-shrink:0; }
 
   .error{
     display:none; margin-top:14px; background:var(--brick-soft); color:var(--brick-text);
@@ -71,38 +64,26 @@
   </div>
 
   <h1 id="form-title">Sign in</h1>
-  <p class="sub" id="form-sub">Enter your email and password to see your schedule.</p>
+  <p class="sub" id="form-sub">Sign in with your work Google account to see your schedule.</p>
 
-  <form id="auth-form">
-    <div id="name-field" style="display:none;">
-      <label for="f-first-name">First name</label>
-      <input type="text" id="f-first-name" autocomplete="given-name" placeholder="Jamie">
-      <label for="f-last-name" style="margin-top:10px;">Surname</label>
-      <input type="text" id="f-last-name" autocomplete="family-name" placeholder="Rivera">
-      <p style="font-size:11px; color:var(--ink-soft); margin:5px 0 0 0; line-height:1.4;">Make sure this is right — once your account's created, only a manager can change it.</p>
-    </div>
-    <label for="f-email">Email</label>
-    <input type="email" id="f-email" autocomplete="email" required placeholder="you@company.com">
-    <label for="f-password">Password</label>
-    <input type="password" id="f-password" autocomplete="current-password" required placeholder="••••••••" minlength="6">
-    <button type="submit" class="btn" id="btn-submit">Sign in</button>
-  </form>
+  <button type="button" class="btn-google" id="btn-google">
+    <svg viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+      <path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/>
+      <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/>
+      <path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/>
+      <path fill="#EA4335" d="M9 3.58c1.32 0 2.51.45 3.44 1.35l2.59-2.59C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/>
+    </svg>
+    <span id="btn-google-label">Sign in with Google</span>
+  </button>
 
   <div class="error" id="form-error"></div>
-
-  <div class="switch" id="switch-row" style="display:none;">
-    <span id="switch-text">New here?</span>
-    <button type="button" id="btn-switch">Create an account</button>
-  </div>
 </div>
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
   import {
-    getAuth, onAuthStateChanged, signInWithEmailAndPassword,
-    createUserWithEmailAndPassword, updateProfile
+    getAuth, onAuthStateChanged, GoogleAuthProvider, signInWithPopup
   } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
-  import { getFirestore, doc, setDoc } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyDSMLKjzO0D_sZLG-0o3lcx2M-sBZOx7xs",
@@ -114,125 +95,53 @@
   };
   const firebaseApp = initializeApp(firebaseConfig);
   const auth = getAuth(firebaseApp);
-  const db = getFirestore(firebaseApp);
+  const provider = new GoogleAuthProvider();
+  // Nudges Google to show the account picker rather than silently reusing whichever Google
+  // account happens to already be signed in on this device — matters a lot here, since people
+  // often have several Google accounts and picking the wrong one would fail the invite match.
+  provider.setCustomParameters({ prompt: 'select_account' });
 
-  // Already signed in? Skip straight to the app — index.html will sort out whether this
-  // account is approved yet or still needs to wait. Guarded during an active submission: a
-  // brand-new signup counts as "signed in" the instant the account is created, a full step
-  // before updateProfile has actually saved their name — if this listener redirected right
-  // then, it would sometimes beat that write to the server, and their typed name would be
-  // silently lost depending on network timing. The submit handler below does its own
-  // redirect once updateProfile has genuinely finished.
-  let formSubmitInProgress = false;
-  onAuthStateChanged(auth, (user)=>{ if(user && !formSubmitInProgress) window.location.replace('index.html'); });
+  // Already signed in? Skip straight to the app — index.html sorts out whether this account
+  // is approved yet or still needs an invite.
+  onAuthStateChanged(auth, (user)=>{ if(user) window.location.replace('index.html'); });
 
-  let mode = 'signin'; // or 'signup'
-  const form = document.getElementById('auth-form');
-  const nameField = document.getElementById('name-field');
-  const firstNameInput = document.getElementById('f-first-name');
-  const lastNameInput = document.getElementById('f-last-name');
-  const emailInput = document.getElementById('f-email');
-  const passwordInput = document.getElementById('f-password');
-  const errorBox = document.getElementById('form-error');
-  const submitBtn = document.getElementById('btn-submit');
-
-  // Arrived via an invite link? Two kinds: a personal link locks the email to exactly what
-  // the admin invited (typing it wrong would silently miss the auto-link and land the person
-  // in the normal pending-approval queue instead of straight on their schedule) — or a group
-  // link, sent to several people at once via one shared email, which can't lock anything but
-  // still needs to mark "this visit came from a real invite" so the signup form is reachable
-  // at all. Without either marker, there's no way to reach account creation from this page —
-  // this app is invite-only, not open signup.
+  // Arrived via an invite link? A personal link names exactly who this was sent to. Can't
+  // lock anything the way a pre-filled email field used to — there's no field anymore — but
+  // it can still tell someone which Google account to actually pick if they have more than
+  // one, before they click through and possibly choose the wrong one.
   const params = new URLSearchParams(window.location.search);
   const inviteEmail = params.get('invite_email');
-  const inviteName = params.get('invite_name');
-  const isGroupInvite = params.get('invited')==='1';
-  let isInvite = false;
-  let isPersonalInvite = false;
   if(inviteEmail){
-    isInvite = true;
-    isPersonalInvite = true;
-    emailInput.value = inviteEmail;
-    emailInput.readOnly = true;
-    emailInput.style.background = 'var(--paper)';
-    if(inviteName){
-      const parts = inviteName.trim().split(/\s+/);
-      firstNameInput.value = parts[0] || '';
-      lastNameInput.value = parts.slice(1).join(' ');
-    }
-  } else if(isGroupInvite){
-    isInvite = true;
+    document.getElementById('form-title').textContent = "You're invited";
+    document.getElementById('form-sub').textContent = `Sign in with the Google account for ${inviteEmail} — you'll see your schedule right away, no waiting on approval.`;
   }
-  if(isInvite) document.getElementById('switch-row').style.display = 'flex';
-
-  function setMode(next){
-    mode = next;
-    const signup = mode === 'signup';
-    document.getElementById('form-title').textContent = signup ? "You're invited — set a password" : 'Sign in';
-    document.getElementById('form-sub').textContent = signup
-      ? (isPersonalInvite ? "You'll see your schedule right away — no waiting on approval." : "Sign up using the exact email your invite was sent to — you'll see your schedule right away, no waiting on approval.")
-      : 'Enter your email and password to see your schedule.';
-    nameField.style.display = signup ? 'block' : 'none';
-    firstNameInput.required = signup;
-    lastNameInput.required = signup;
-    passwordInput.setAttribute('autocomplete', signup ? 'new-password' : 'current-password');
-    submitBtn.textContent = signup ? 'Create account' : 'Sign in';
-    document.getElementById('switch-text').textContent = signup ? 'Already have an account?' : 'New here?';
-    document.getElementById('btn-switch').textContent = signup ? 'Sign in instead' : 'Create an account';
-    errorBox.classList.remove('show');
-  }
-  document.getElementById('btn-switch').addEventListener('click', ()=>{
-    // Switching back to sign-in is always fine. Switching *to* signup only makes sense if
-    // this visit actually came from an invite — otherwise there's nothing to switch to.
-    if(mode==='signin' && !isInvite) return;
-    setMode(mode==='signup' ? 'signin' : 'signup');
-  });
-  if(isInvite) setMode('signup');
 
   function friendlyError(code){
     const map = {
-      'auth/invalid-email': 'That email address doesn\u2019t look right.',
-      'auth/user-not-found': 'No account with that email. Try creating one instead.',
-      'auth/wrong-password': 'Wrong password. Try again.',
-      'auth/invalid-credential': 'Email or password is incorrect.',
-      'auth/email-already-in-use': 'An account already exists for that email. Try signing in instead.',
-      'auth/weak-password': 'Use at least 6 characters for your password.',
+      'auth/popup-closed-by-user': '', // they cancelled — no error needed, just let them try again
+      'auth/popup-blocked': 'Your browser blocked the sign-in popup. Check your popup blocker and try again.',
+      'auth/cancelled-popup-request': '',
+      'auth/network-request-failed': 'Network problem — check your connection and try again.',
     };
-    return map[code] || 'Something went wrong. Please try again.';
+    return code in map ? map[code] : 'Something went wrong signing in. Please try again.';
   }
 
-  form.addEventListener('submit', async (e)=>{
-    e.preventDefault();
+  const googleBtn = document.getElementById('btn-google');
+  const googleLabel = document.getElementById('btn-google-label');
+  const errorBox = document.getElementById('form-error');
+  googleBtn.addEventListener('click', async ()=>{
     errorBox.classList.remove('show');
-    submitBtn.disabled = true;
-    formSubmitInProgress = true;
-    const email = emailInput.value.trim();
-    const password = passwordInput.value;
+    googleBtn.disabled = true;
+    googleLabel.textContent = 'Signing in…';
     try{
-      if(mode === 'signup'){
-        const firstName = firstNameInput.value.trim();
-        const lastName = lastNameInput.value.trim();
-        if(!firstName || !lastName){
-          errorBox.textContent = 'Please enter both your first name and surname.';
-          errorBox.classList.add('show');
-          (firstName ? lastNameInput : firstNameInput).focus();
-          submitBtn.disabled = false;
-          formSubmitInProgress = false;
-          return;
-        }
-        const name = `${firstName} ${lastName}`;
-        const cred = await createUserWithEmailAndPassword(auth, email, password);
-        await updateProfile(cred.user, { displayName: name });
-      } else {
-        await signInWithEmailAndPassword(auth, email, password);
-      }
+      await signInWithPopup(auth, provider);
       window.location.replace('index.html');
     }catch(err){
       console.error(err);
-      errorBox.textContent = friendlyError(err.code);
-      errorBox.classList.add('show');
-      submitBtn.disabled = false;
-      formSubmitInProgress = false;
+      const msg = friendlyError(err.code);
+      if(msg){ errorBox.textContent = msg; errorBox.classList.add('show'); }
+      googleBtn.disabled = false;
+      googleLabel.textContent = 'Sign in with Google';
     }
   });
 </script>
