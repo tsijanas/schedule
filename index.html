@@ -4261,7 +4261,7 @@ document.getElementById('btn-add-team').addEventListener('click', ()=>{
 });
 document.getElementById('btn-save-teams').addEventListener('click', async ()=>{
   const wrap = document.getElementById('teams-list');
-  wrap.querySelectorAll('[data-ti]').forEach(row=>{
+  wrap.querySelectorAll('.team-row[data-ti]').forEach(row=>{
     const ti = +row.dataset.ti;
     const name = row.querySelector('.team-name').value.trim() || 'Untitled team';
     const managerId = row.querySelector('.team-manager').value || null;
