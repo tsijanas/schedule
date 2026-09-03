@@ -3346,6 +3346,15 @@ async function mergeMembers(keepId, absorbId){
   logAudit('member.merge', { kept: keep.name, mergedAwayName: absorb.name });
   return true;
 }
+// Builds <option> tags for teams within one department — used for the person-edit card's
+// team picker, both on initial render and to re-populate when a manager's department changes.
+// Falls back to every team if no departments exist yet (nothing to scope to) or the given
+// department genuinely has none, so the picker is never left empty.
+function teamOptionsForDept(deptId, selectedTeamId){
+  const inDept = (state.departments.length>0 && deptId) ? teamsInDepartment(deptId) : state.teams;
+  const pool = inDept.length>0 ? inDept : state.teams;
+  return pool.map(t=>`<option value="${t.id}" ${t.id===selectedTeamId?'selected':''}>${escHtml(t.name)}</option>`).join('');
+}
 function renderTeamTab(){
   renderInvitesCard();
   renderStandardTasksByLevelCard();
@@ -3408,7 +3417,7 @@ function renderTeamTab(){
             <div class="m-col-label">Profile</div>
             <div class="field"><label>Email</label><input type="email" class="m-email" value="${escAttr((memberContacts[m.id]&&memberContacts[m.id].email)||'')}"><div class="field-error email-dupe-error"></div></div>
             ${pendingInviteBadge ? `<div style="display:flex; gap:6px; margin-bottom:12px;"><button type="button" class="btn secondary small btn-copy-invite" data-mid="${m.id}">Copy link</button><button type="button" class="btn secondary small btn-email-invite" data-mid="${m.id}">Email invite</button></div>` : ''}
-            <div class="field"><label>Team</label><select class="m-team">${state.teams.map(t=>`<option value="${t.id}" ${t.id===m.teamId?'selected':''}>${escHtml(t.name)}</option>`).join('')}</select></div>
+            <div class="field"><label>Team</label><select class="m-team">${teamOptionsForDept(currentDepartmentId, m.teamId)}</select></div>
             <div class="field" style="margin-top:12px;">
               <label>Birthday <span class="muted" style="font-weight:400;">(month + day only)</span></label>
               <div style="display:flex; gap:8px;">
@@ -3597,6 +3606,30 @@ function renderTeamTab(){
     radio.addEventListener('change', ()=>{
       const row = radio.closest('.admin-toggle-row').querySelector('.m-manager-dept-row');
       row.style.display = radio.value==='manager' ? '' : 'none';
+    });
+  });
+  wrap.querySelectorAll('.m-manager-dept').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      // Changing which department someone manages doesn't, on its own, move which team
+      // they're physically on — without this, they'd stay visible in their old department's
+      // lists (Teams & People, Grand Schedule, etc.) even after their manager scope moved.
+      const card = sel.closest('.member-card');
+      const teamSel = card ? card.querySelector('.m-team') : null;
+      if(!teamSel) return;
+      const fselWrapper = teamSel.closest('.fsel');
+      if(fselWrapper){
+        // Fully unwrap and rebuild rather than just re-sync — the enhanced dropdown's own
+        // popup menu is only ever built once, and re-syncing alone only updates the trigger
+        // button's displayed text, leaving the actual menu showing the old, stale team list.
+        const parent = fselWrapper.parentElement;
+        parent.insertBefore(teamSel, fselWrapper);
+        fselWrapper.remove();
+        teamSel.classList.remove('fsel-native');
+        delete teamSel.dataset.fselDone;
+      }
+      teamSel.innerHTML = teamOptionsForDept(sel.value, null);
+      enhanceSelect(teamSel);
+      teamSel.dispatchEvent(new Event('change', {bubbles:true}));
     });
   });
 // ---- Revoking access on removal ----
