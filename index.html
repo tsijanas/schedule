@@ -686,7 +686,7 @@
         </div>
         <div id="team-table-wrap"></div>
       </div>
-      <div class="card">
+      <div class="card" id="unassigned-card">
         <h3>Unassigned <span class="muted" style="font-weight:400; font-size:12px;">— people who exist but aren't on a team yet, ready for you to place them.</span></h3>
         <div id="unassigned-list"></div>
       </div>
@@ -4163,8 +4163,15 @@ async function removeTeamEntirely(teamId){
 }
 function renderTeamsList(){
   const wrap = document.getElementById('teams-list');
-  const teamLeadOptions = state.members;
   const scopeToCurrentDept = state.departments.length > 0 && currentDepartmentId;
+  const teamLeadOptions = scopeToCurrentDept
+    ? (()=>{
+        const idsInDept = new Set(state.teams
+          .filter(t=> currentDepartmentId==='__ungrouped__' ? !t.departmentId : t.departmentId===currentDepartmentId)
+          .map(t=>t.id));
+        return state.members.filter(m=>idsInDept.has(m.teamId));
+      })()
+    : state.members;
   let html = '';
   state.teams.forEach((t,ti)=>{
     if(scopeToCurrentDept){
@@ -4261,13 +4268,30 @@ document.getElementById('btn-save-teams').addEventListener('click', async ()=>{
     state.teams[ti] = {...state.teams[ti], name, managerId};
   });
   const ok = await safeSet('teams', state.teams);
-  if(ok){ showToast('Teams saved'); logAudit('team.save_all', { count: state.teams.length }); }
+  if(ok){
+    showToast('Teams saved');
+    logAudit('team.save_all', { count: state.teams.length });
+  } else {
+    // Previously silent on failure — nothing shown at all. Surfaces the actual underlying
+    // error (safeSet already captures it into lastStorageError) so a real failure is visible
+    // and diagnosable, not indistinguishable from the button doing nothing.
+    const detail = lastStorageError ? ` (${lastStorageError.what})` : '';
+    showToast(`Couldn't save — check the banner above for details${detail}`);
+  }
   renderTeamSwitcher();
 });
 
 // People without a team yet — the queue an admin works from to place already-invited people
 // (or anyone manually added) onto a team.
 async function renderUnassignedList(){
+  const card = document.getElementById('unassigned-card');
+  const me = currentViewerMember();
+  const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
+  if(!isOrgAdmin){
+    if(card) card.style.display = 'none';
+    return;
+  }
+  if(card) card.style.display = '';
   const wrap = document.getElementById('unassigned-list');
   const unassigned = state.members.filter(m=>!m.teamId || !state.teams.some(t=>t.id===m.teamId));
   if(unassigned.length===0){
