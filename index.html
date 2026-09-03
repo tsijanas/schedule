@@ -1710,6 +1710,80 @@ function fmtWeek(mon){ const sun=addDays(mon,6); const opt={month:'long',day:'nu
 let storageWorking = null; // null = unknown yet, true/false once we know
 let lastStorageError = null; // { when, what } — surfaced in the banner itself
 
+// Loads task/requirement data for exactly the given teams — used both for the one-time
+// full load on a brand-new install (every team, since that migration has to touch
+// everything once) and for the normal, scoped case (only whichever teams the signed-in
+// person actually needs, decided in bindIdentityToMember). Merges into state.tasksByTeam
+// etc. rather than replacing them, so calling this again later for different teams doesn't
+// discard anything already loaded.
+async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
+  const dirtyTaskTeams = [];
+  await Promise.all(teamIds.map(async teamId=>{
+    try{
+      const tt = await window.storage.get('tasks_'+teamId, true);
+      state.tasksByTeam[teamId] = tt ? JSON.parse(tt.value) : (legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)));
+    }catch(e){ state.tasksByTeam[teamId] = legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)); }
+    try{
+      const rr = await window.storage.get('weekly_req_'+teamId, true);
+      state.reqByTeam[teamId] = rr ? JSON.parse(rr.value) : (legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)));
+    }catch(e){ state.reqByTeam[teamId] = legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)); }
+    try{
+      const rl = await window.storage.get('weekly_req_levels_'+teamId, true);
+      state.reqLevelsByTeam[teamId] = rl ? JSON.parse(rl.value) : {};
+    }catch(e){ state.reqLevelsByTeam[teamId] = {}; }
+    // Same one-time cleanup as members, but for tasks — a task restricted to (or made visible
+    // to) "Manager" as a level would now be impossible to satisfy, since nobody can hold that
+    // level anymore. Only persists for teams that actually had something to clean.
+    let dirty = false;
+    (state.tasksByTeam[teamId]||[]).forEach(task=>{
+      if(task.levels && task.levels.includes('Manager')){ task.levels = task.levels.filter(l=>l!=='Manager'); dirty = true; }
+      if(task.visibleToLevels && task.visibleToLevels.includes('Manager')){ task.visibleToLevels = task.visibleToLevels.filter(l=>l!=='Manager'); dirty = true; }
+    });
+    if(dirty) dirtyTaskTeams.push(teamId);
+  }));
+  if(dirtyTaskTeams.length>0){
+    for(const teamId of dirtyTaskTeams){ await safeSet('tasks_'+teamId, state.tasksByTeam[teamId], true); }
+  }
+}
+// Loads whichever of the given teams aren't already loaded — safe to call repeatedly (e.g.
+// every time the team/department switcher changes) since it's a no-op for anything already
+// in state.tasksByTeam.
+async function ensureTeamDataLoaded(teamIds){
+  const missing = (teamIds||[]).filter(id=> !(id in state.tasksByTeam));
+  if(missing.length>0) await loadTeamTaskData(missing);
+}
+// Decides which teams a signed-in person actually needs their task/requirement data loaded
+// for, right now — an Admin needs their current department's teams (so Grand views work),
+// a Manager needs the same only if their department actually has Grand views turned on
+// (otherwise just their own team), and a Viewer only ever needs their own team.
+function teamsNeededForViewer(m){
+  if(!m) return [];
+  if(m.isAdmin){
+    // currentDepartmentId itself isn't set yet at the point this runs (that happens later, in
+    // renderTeamSwitcher) — derive the same answer directly from currentTeamId instead, which
+    // by this point already has its final value via the restore-from-localStorage logic above.
+    const landingTeam = state.teams.find(t=>t.id===currentTeamId);
+    const deptId = landingTeam ? (landingTeam.departmentId || '__ungrouped__') : null;
+    if(deptId==='__ungrouped__') return state.teams.filter(t=>!t.departmentId).map(t=>t.id);
+    if(deptId) return state.teams.filter(t=>t.departmentId===deptId).map(t=>t.id);
+    return currentTeamId ? [currentTeamId] : []; // no department set up at all yet — just their own team
+  }
+  if(m.role==='manager'){
+    const dept = state.departments.find(d=>d.id===m.managerDeptId);
+    if(dept && dept.showGrandViews!==false){
+      return state.teams.filter(t=>t.departmentId===m.managerDeptId).map(t=>t.id);
+    }
+    return m.teamId ? [m.teamId] : [];
+  }
+  // A viewer needs more than just their own team: "Who's on" (whosOnScopeTeams) shows who's
+  // working visible tasks across every team in their department, not only their own — this
+  // is unrelated to a department's Grand-views toggle, which only controls the separate
+  // admin-facing Grand Schedule/Requirement/etc, not this viewer-facing feature.
+  if(!m.teamId) return [];
+  const myTeam = state.teams.find(t=>t.id===m.teamId);
+  if(myTeam && myTeam.departmentId) return state.teams.filter(t=>t.departmentId===myTeam.departmentId).map(t=>t.id);
+  return [m.teamId];
+}
 async function loadState(){
   // Teams first — if there are none yet, this is either a brand-new install or an upgrade
   // from before teams existed, so we create one default team and fold any old data into it.
@@ -1805,37 +1879,16 @@ async function loadState(){
   state.tasksByTeam = {};
   state.reqByTeam = {};
   state.reqLevelsByTeam = {};
-  await Promise.all(state.teams.map(async team=>{
-    try{
-      const tt = await window.storage.get('tasks_'+team.id, true);
-      state.tasksByTeam[team.id] = tt ? JSON.parse(tt.value) : (legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)));
-    }catch(e){ state.tasksByTeam[team.id] = legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)); }
-    try{
-      const rr = await window.storage.get('weekly_req_'+team.id, true);
-      state.reqByTeam[team.id] = rr ? JSON.parse(rr.value) : (legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)));
-    }catch(e){ state.reqByTeam[team.id] = legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)); }
-    try{
-      const rl = await window.storage.get('weekly_req_levels_'+team.id, true);
-      state.reqLevelsByTeam[team.id] = rl ? JSON.parse(rl.value) : {};
-    }catch(e){ state.reqLevelsByTeam[team.id] = {}; }
-  }));
-
-  // Same one-time cleanup as members, but for tasks — a task restricted to (or made visible
-  // to) "Manager" as a level would now be impossible to satisfy, since nobody can hold that
-  // level anymore. Only persists for teams that actually had something to clean.
-  const dirtyTaskTeams = [];
-  Object.entries(state.tasksByTeam).forEach(([teamId, tasks])=>{
-    let dirty = false;
-    (tasks||[]).forEach(task=>{
-      if(task.levels && task.levels.includes('Manager')){ task.levels = task.levels.filter(l=>l!=='Manager'); dirty = true; }
-      if(task.visibleToLevels && task.visibleToLevels.includes('Manager')){ task.visibleToLevels = task.visibleToLevels.filter(l=>l!=='Manager'); dirty = true; }
-    });
-    if(dirty) dirtyTaskTeams.push(teamId);
-  });
-  if(dirtyTaskTeams.length>0){
-    for(const teamId of dirtyTaskTeams){ await safeSet('tasks_'+teamId, state.tasksByTeam[teamId], true); }
+  // On a brand-new install, every team needs its defaults (and any legacy data) written once
+  // — that has to touch everything regardless. On every other, ordinary boot, deliberately
+  // load nothing here — bindIdentityToMember loads only whichever teams the signed-in person
+  // actually needs, once it knows who that is and what they need to see (see
+  // teamsNeededForViewer). This is the actual performance change: an Admin or Manager no
+  // longer waits on every team in the whole app before they can see anything, just the ones
+  // relevant to where they're actually landing.
+  if(firstRun){
+    await loadTeamTaskData(state.teams.map(t=>t.id), legacyTasks, legacyReq);
   }
-
   try{
     const bh = await window.storage.get('bank_holidays', true);
     state.bankHolidays = bh ? JSON.parse(bh.value) : null;
@@ -1871,9 +1924,11 @@ async function loadState(){
   if(firstRun) await safeSet('teams', state.teams, true);
   if(firstRun || membersMigrated || !loadedMembersFromCollection) await persistMembers(true);
   if(firstRun || !loadedHolidaysFromCollection) await persistHolidays();
-  for(const team of state.teams){
-    await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
-    await safeSet('weekly_req_'+team.id, state.reqByTeam[team.id], true);
+  if(firstRun){
+    for(const team of state.teams){
+      await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
+      await safeSet('weekly_req_'+team.id, state.reqByTeam[team.id], true);
+    }
   }
 
   // quick connectivity check, silent — decides whether to show the backup-reminder banner
@@ -2616,7 +2671,9 @@ function diffScheduleForPerson(oldSched, newSched, memberId){
 }
 function summarizeInstantCoverage(changes){
   const taskNameIn = (teamId, taskId)=> ((state.tasksByTeam[teamId]||[]).find(t=>t.id===taskId)||{}).name || 'a task';
-  return changes.map(c=> `${taskNameIn(c.teamId, c.taskId)} on ${fmtShortDate(c.dateISO)}`).join(', ');
+  const byDate = {};
+  changes.forEach(c=>{ (byDate[c.dateISO] = byDate[c.dateISO] || []).push(taskNameIn(c.teamId, c.taskId)); });
+  return Object.keys(byDate).sort().map(dateISO=> `${byDate[dateISO].join(', ')} on ${fmtShortDate(dateISO)}`).join(' · ');
 }
 function summarizeScheduleChanges(changes, teamId){
   const tasks = state.tasksByTeam[teamId] || [];
@@ -2630,8 +2687,8 @@ function summarizeScheduleChanges(changes, teamId){
     if(added.length===1 && removed.length===1){
       lines.push(`${taskName(removed[0])} → ${taskName(added[0])} on ${dateLabel}`);
     } else {
-      added.forEach(tid=> lines.push(`Added ${taskName(tid)} on ${dateLabel}`));
-      removed.forEach(tid=> lines.push(`Removed ${taskName(tid)} on ${dateLabel}`));
+      if(added.length) lines.push(`Added ${added.map(taskName).join(', ')} on ${dateLabel}`);
+      if(removed.length) lines.push(`Removed ${removed.map(taskName).join(', ')} on ${dateLabel}`);
     }
   });
   return lines.join(' · ') || 'Your schedule was updated.';
@@ -3988,6 +4045,7 @@ async function switchTeam(teamId){
   currentTeamId = teamId;
   try{ localStorage.setItem('lastActiveTeam', teamId); }catch(e){}
   balanceCache = null;
+  await ensureTeamDataLoaded(teamsNeededForViewer(me));
   renderTeamSwitcher();
   renderTeamTab();
   renderTasksTab();
@@ -4011,6 +4069,11 @@ async function removeTeamEntirely(teamId){
   if(!team) return;
   if(state.members.some(m=>m.teamId===teamId)){ showToast('Move everyone off this team before removing it'); return; }
   if(state.teams.length<=1){ showToast('You need at least one team'); return; }
+  // This can be triggered from the Departments tab, which shows teams across every
+  // department — not just whichever one is currently loaded — so the snapshot below could
+  // otherwise silently capture an empty array for a team nobody's actually loaded this
+  // session, and undo would then overwrite the real data with nothing.
+  await ensureTeamDataLoaded([teamId]);
   askConfirm(`Remove the team "${team.name}"? Its tasks and weekly needs go with it.`, 'Remove', async ()=>{
     const insertAt = state.teams.findIndex(t=>t.id===teamId);
     const teamSnapshot = JSON.parse(JSON.stringify(team));
@@ -4369,6 +4432,15 @@ function renderTasksTab(){
     saveAllTasksBtn.addEventListener('click', async ()=>{
       const cards = Array.from(wrap.querySelectorAll('.task-card'));
       if(cards.length===0) return;
+      // Linked-task propagation below checks every team in state.teams for a matching
+      // sharedTaskId — normally already satisfied (Admins and Grand-view Managers already
+      // have their whole department loaded), but a Manager without Grand-views only has
+      // their own team loaded by default, and a link could still exist elsewhere in their
+      // department from before Grand-views was turned off.
+      const myTeam = state.teams.find(t=>t.id===currentTeamId);
+      if(myTeam && myTeam.departmentId){
+        await ensureTeamDataLoaded(state.teams.filter(t=>t.departmentId===myTeam.departmentId).map(t=>t.id));
+      }
       let renamedAny = false;
       const linkedTeamIdsTouched = new Set();
       cards.forEach(card=>{
@@ -5527,6 +5599,10 @@ function renderRosterImportPreview(plan){
   return html;
 }
 async function executeRosterImport(parsed){
+  // Same reasoning as export: a roster CSV can reference teams in any department, not just
+  // whichever one happens to be loaded already — load everything first so existing task
+  // data for any team being updated is never mistaken for empty.
+  await ensureTeamDataLoaded(state.teams.map(t=>t.id));
   const teamByName = {};
   state.teams.forEach(t=> teamByName[t.name.toLowerCase()] = t);
   for(const row of parsed.rows){
@@ -7395,7 +7471,12 @@ function buildExportPayload(){
     schedulesByTeam: state.schedulesByTeam,
   };
 }
-document.getElementById('btn-export').addEventListener('click', ()=>{
+document.getElementById('btn-export').addEventListener('click', async ()=>{
+  // Export needs every team's data, not just whichever ones happen to be loaded so far in
+  // this session — deliberately loads everything here, since a backup silently missing teams
+  // nobody's visited yet this session would be a real, serious problem, and export is rare
+  // enough that this isn't a meaningful speed cost.
+  await ensureTeamDataLoaded(state.teams.map(t=>t.id));
   const json = JSON.stringify(buildExportPayload(), null, 2);
   const ta = document.getElementById('export-output');
   ta.value = json; ta.style.display = 'block';
@@ -7413,7 +7494,10 @@ document.getElementById('btn-export').addEventListener('click', ()=>{
 });
 document.getElementById('btn-copy-export').addEventListener('click', async ()=>{
   const ta = document.getElementById('export-output');
-  if(!ta.value){ ta.value = JSON.stringify(buildExportPayload(), null, 2); }
+  if(!ta.value){
+    await ensureTeamDataLoaded(state.teams.map(t=>t.id));
+    ta.value = JSON.stringify(buildExportPayload(), null, 2);
+  }
   ta.style.display = 'block';
   try{ await navigator.clipboard.writeText(ta.value); showToast('Copied to clipboard'); }
   catch(e){ ta.focus(); ta.select(); showToast('Select the text below and copy manually'); }
@@ -7438,6 +7522,10 @@ document.getElementById('btn-import').addEventListener('click', async ()=>{
   let data;
   try{ data = JSON.parse(raw); }
   catch(e){ showToast("That doesn't look like valid backup JSON"); return; }
+  // Only matters if the imported JSON is missing tasksByTeam/reqByTeam entirely (a malformed
+  // or very old backup) and falls back to whatever's in the current session — same
+  // completeness guarantee as export/roster-import, cheap insurance for a rare action.
+  await ensureTeamDataLoaded(state.teams.map(t=>t.id));
   state.teams = data.teams || state.teams;
   state.departments = data.departments || state.departments || [];
   state.members = data.members || state.members;
@@ -7613,6 +7701,10 @@ async function bindIdentityToMember(info){
     }
   }
   balanceCache = null;
+  // The actual performance change: load only whichever teams this specific person needs
+  // (see teamsNeededForViewer) rather than every team in the whole app, now that we
+  // definitively know who they are and where they're landing.
+  await ensureTeamDataLoaded(teamsNeededForViewer(m));
   const mode = (m.isAdmin || m.role==='manager') ? 'admin' : 'viewer';
   setMode(mode);
 }
