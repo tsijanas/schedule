@@ -1198,18 +1198,19 @@ Sam Taylor	sam.taylor@company.com	IC3"></textarea>
     <div style="margin-top:14px;" id="invite-level-field">
       <label style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; display:block; margin-bottom:6px;">Level (default — a line can override this)</label>
       <div class="m-level-cell" id="invite-level-pick">
+        <label class="chip-check"><input type="radio" name="invite-level" value="" id="invite-level-none"> No level</label>
         <label class="chip-check"><input type="radio" name="invite-level" value="IC1" checked> IC1</label>
         <label class="chip-check"><input type="radio" name="invite-level" value="IC2"> IC2</label>
         <label class="chip-check"><input type="radio" name="invite-level" value="IC3"> IC3</label>
       </div>
-      <div class="muted" style="font-size:11px; margin-top:6px;">They'll start eligible for whatever's already open to this level on this team — editable per person afterward.</div>
+      <div class="muted" style="font-size:11px; margin-top:6px;" id="invite-level-hint">They'll start eligible for whatever's already open to this level on this team — editable per person afterward.</div>
     </div>
     <div style="margin-top:14px;">
       <label style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; display:block; margin-bottom:6px;">Role</label>
       <div class="m-level-cell">
         <label class="chip-check"><input type="radio" name="invite-role" value="" checked> Viewer</label>
         <label class="chip-check"><input type="radio" name="invite-role" value="manager"> Manager</label>
-        <label class="chip-check"><input type="radio" name="invite-role" value="admin"> Admin</label>
+        <label class="chip-check" id="invite-role-admin-option"><input type="radio" name="invite-role" value="admin"> Admin</label>
       </div>
     </div>
     <div class="row" style="margin-top:16px;">
@@ -2013,17 +2014,38 @@ async function ensureInManagersList(uid){
     }
   }catch(e){ console.warn('Could not add to managers list (non-fatal)', e); }
 }
+async function ensureInAdminsList(uid){
+  try{
+    const { db, doc, getDoc, setDoc, updateDoc, arrayUnion } = window.rotaDb;
+    const ref = doc(db, 'access_control', 'admins');
+    const snap = await getDoc(ref);
+    if(!snap.exists()){
+      await setDoc(ref, { uids:[uid] });
+    } else if(!(snap.data().uids||[]).includes(uid)){
+      await updateDoc(ref, { uids: arrayUnion(uid) });
+    }
+  }catch(e){ console.warn('Could not add to admins list (non-fatal)', e); }
+}
 let managersSyncSnapshot = null; // last-known sorted,joined manager-uid list actually written
 async function syncManagerRoster(){
   if(viewMode !== 'admin') return; // only a manager/owner session has the contacts loaded to compute this correctly
   try{
-    const managerUids = state.members.filter(m=>m.isAdmin && memberContacts[m.id]?.authUid).map(m=>memberContacts[m.id].authUid);
-    const key = [...managerUids].sort().join(',');
+    // Two separate lists now: "managers" is broad — admin OR manager role — matching how the
+    // rest of the app already treats a Manager (full write access, scoped only by the UI, per
+    // the existing "Full access within [department]" badge). Without a Manager actually being
+    // in this list, they could never write app_members at all — meaning "+ Invite people"
+    // would silently fail for them, which is a more basic bug than just admin-rights
+    // restriction. "admins" is new and narrow — only a true org Admin — and is what actually
+    // gates who can grant Admin rights to someone, below.
+    const managerUids = state.members.filter(m=>(m.isAdmin || m.role==='manager') && memberContacts[m.id]?.authUid).map(m=>memberContacts[m.id].authUid);
+    const adminUids = state.members.filter(m=>m.isAdmin && memberContacts[m.id]?.authUid).map(m=>memberContacts[m.id].authUid);
+    const key = [...managerUids].sort().join(',') + '|' + [...adminUids].sort().join(',');
     if(managersSyncSnapshot === key) return;
     const { db, doc, setDoc } = window.rotaDb;
     await setDoc(doc(db, 'access_control', 'managers'), { uids: managerUids });
+    await setDoc(doc(db, 'access_control', 'admins'), { uids: adminUids });
     managersSyncSnapshot = key;
-  }catch(e){ console.warn('Could not sync managers list (non-fatal)', e); }
+  }catch(e){ console.warn('Could not sync managers/admins list (non-fatal)', e); }
 }
 // ---- Audit log ----
 // A simple append-only record of admin/write actions: who, what, when. Viewable in the Data
@@ -3807,7 +3829,15 @@ function parseInviteRows(text){
 }
 function updateInviteLevelFieldVisibility(){
   const role = document.querySelector('input[name="invite-role"]:checked')?.value || '';
-  document.getElementById('invite-level-field').style.display = role ? 'none' : 'block';
+  document.getElementById('invite-level-field').style.display = role==='admin' ? 'none' : 'block';
+  // Manager defaults to "No level" — most managers won't need one, but an IC3 who's also
+  // managing their team can still pick a real one right here rather than needing a second,
+  // separate step afterward. Viewer keeps defaulting to IC1, since almost every Viewer needs one.
+  if(role==='manager'){
+    document.getElementById('invite-level-none').checked = true;
+  } else if(role===''){
+    document.querySelector('input[name="invite-level"][value="IC1"]').checked = true;
+  }
 }
 document.querySelectorAll('input[name="invite-role"]').forEach(radio=>{
   radio.addEventListener('change', updateInviteLevelFieldVisibility);
@@ -3829,6 +3859,11 @@ function openInviteModal(prefillText){
   refreshInviteTeamOptions();
   document.querySelector('input[name="invite-level"][value="IC1"]').checked = true;
   document.querySelector('input[name="invite-role"][value=""]').checked = true;
+  // Only an existing org Admin can grant Admin rights to someone else — a Manager opening
+  // this modal never even sees the option, not just gets blocked after picking it.
+  const me = currentViewerMember();
+  const iAmOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
+  document.getElementById('invite-role-admin-option').style.display = iAmOrgAdmin ? '' : 'none';
   updateInviteLevelFieldVisibility();
   updateInviteEmailsPreview();
   document.getElementById('invite-modal').classList.add('open');
@@ -3864,7 +3899,7 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
   if(rows.length===0){ showToast('Paste at least one valid email first'); return; }
   const teamId = document.getElementById('invite-team-pick').value;
   if(!teamId){ showToast('No team available to invite into'); return; }
-  const defaultLevel = document.querySelector('input[name="invite-level"]:checked')?.value || 'IC1';
+  const defaultLevel = document.querySelector('input[name="invite-level"]:checked')?.value || '';
   const role = document.querySelector('input[name="invite-role"]:checked')?.value || null;
   const deptPick = document.getElementById('invite-dept-pick');
   const managerDeptId = (role==='manager' && state.departments.length>0 && deptPick.value!=='__ungrouped__') ? deptPick.value : null;
@@ -3886,8 +3921,7 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
   const created = [];
   toCreate.forEach(row=>{
     const id = 'm_'+Math.random().toString(36).slice(2,9);
-    const isViewer = !role;
-    const level = isViewer ? (row.level || defaultLevel) : null;
+    const level = (role==='admin') ? null : (row.level || defaultLevel || null);
     state.members.push({
       id, name: row.name || '', levels: level ? [level] : [],
       isAdmin: role==='admin', role: role||null, managerDeptId,
@@ -3901,6 +3935,16 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
     const skipNote = skipped.length>0 ? ` (skipped ${skipped.length} already on file: ${skipped.join(', ')})` : '';
     showToast(`Invited ${toCreate.length} ${toCreate.length===1?'person':'people'}${skipNote}`);
     logAudit('member.invite', { count: toCreate.length, skipped: skipped.length, teamId, role: role||'viewer' });
+  } else {
+    // Most likely cause now: a Manager tried to invite someone as Admin, correctly blocked by
+    // the rules — without this, they'd see nothing happen at all with no explanation why.
+    showToast(role==='admin' ? "Couldn't create the invite — only an Admin can grant Admin rights" : "Couldn't create the invite — please try again");
+  }
+  if(!ok){
+    // Roll back the optimistic local additions so a failed write doesn't leave phantom,
+    // unsaved people in the UI.
+    const createdIds = new Set(created.map(c=>c.id));
+    state.members = state.members.filter(m=>!createdIds.has(m.id));
   }
   if(teamId===currentTeamId){ renderTeamTab(); } else { renderInvitesCard(); }
   renderTeamsList();
@@ -4006,13 +4050,20 @@ function renderTeamSwitcher(){
   }
 
   if(me && me.role==='manager'){
-    // Locked — a Manager never gets a department picker, just a label naming the one they manage.
+    // Locked — a Manager never gets a department picker, just a label naming the one they
+    // manage. Hides the select itself AND its enhanced wrapper (if enhanceSelect has already
+    // run on it) — the wrapper has its own separate, always-visible trigger button and menu
+    // that doesn't automatically hide just because the underlying select does.
     deptWrap.style.display = depts.length ? 'block' : 'none';
     deptSel.style.display = 'none';
+    const deptFselWrap = deptSel.closest('.fsel');
+    if(deptFselWrap) deptFselWrap.style.display = 'none';
     deptLabel.textContent = `Department — ${depts[0]?.name || ''}`;
   } else {
     deptWrap.style.display = 'block';
     deptSel.style.display = '';
+    const deptFselWrap2 = deptSel.closest('.fsel');
+    if(deptFselWrap2) deptFselWrap2.style.display = '';
     deptLabel.textContent = 'Department';
     deptSel.innerHTML = depts.map(d=>`<option value="${d.id}" ${d.id===currentDepartmentId?'selected':''}>${escHtml(d.name)}</option>`).join('');
     enhanceSelect(deptSel);
@@ -4024,6 +4075,14 @@ function renderTeamSwitcher(){
   applyTeamAccent();
 }
 document.getElementById('dept-switch-select').addEventListener('change', (e)=>{
+  const me = currentViewerMember();
+  if(me && me.role==='manager'){
+    // Defense in depth — the dropdown is already hidden for a Manager (see
+    // renderTeamSwitcher), but this blocks the actual switch too, so a UI regression alone
+    // could never let a Manager cross into a department they don't manage.
+    renderTeamSwitcher();
+    return;
+  }
   currentDepartmentId = e.target.value;
   const teamsHere = teamsInDepartment(currentDepartmentId);
   if(teamsHere.length>0) switchTeam(teamsHere[0].id); else renderTeamSwitcher();
@@ -7668,12 +7727,20 @@ async function bindIdentityToMember(info){
     // Repair, every login: whatever else changed in the stored data, the owner always ends
     // up with Admin access, on a real team, with their contact record intact.
     await ensureInManagersList(info.uid);
+    await ensureInAdminsList(info.uid);
     let changed = false;
     if(!m.isAdmin){ m.isAdmin = true; changed = true; }
     if(m.role!=='admin'){ m.role = 'admin'; changed = true; }
     if(!m.teamId || !state.teams.some(t=>t.id===m.teamId)){ m.teamId = state.teams[0]?.id || null; changed = true; }
     if(changed) await persistMembers();
     await saveContact(m.id, info.email, info.uid);
+  } else if(m.isAdmin || m.role==='manager'){
+    // Same reasoning as the owner case above, for any other existing Admin or Manager — this
+    // is what actually lets "+ Invite people" and everything else that writes app_members
+    // work at all for them, rather than silently failing until some unrelated admin session
+    // happens to run a sync afterward.
+    await ensureInManagersList(info.uid);
+    if(m.isAdmin) await ensureInAdminsList(info.uid);
   }
   if(!m.name || m.name.trim()===''){
     await showNameConfirmScreen(m, info.name);
