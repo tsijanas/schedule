@@ -613,6 +613,7 @@
 
       <button class="nav-item viewer-only" data-tab="notifications">Notifications<span class="notif-red-dot" id="notif-red-dot" style="display:none;"></span></button>
       <button class="nav-item viewer-only active" data-tab="myschedule">My schedule</button>
+      <button class="nav-item viewer-only" data-tab="viewer-grand">Grand schedule</button>
       <button class="nav-item viewer-only" data-tab="myholidays">My holidays</button>
       <button class="nav-item viewer-only" data-tab="whoson" id="nav-whoson" style="display:none;">Who's on</button>
     </div>
@@ -954,6 +955,25 @@
       <div class="card" style="overflow-x:auto;">
         <div id="viewer-sched-grid-wrap"></div>
       </div>
+    </div>
+
+    <!-- GRAND SCHEDULE (viewer) — shows the department's combined view if that's turned on,
+    otherwise falls back to the viewer's own team, same grid either way. -->
+    <div class="tab-panel viewer-only" id="tab-viewer-grand">
+      <div class="page-head">
+        <h1>Grand schedule</h1>
+        <p id="viewer-grand-note">Who's on what this week — your own rows are highlighted. This view is read-only.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="week-nav">
+            <button id="vg-wk-prev">‹</button>
+            <div class="wk-label" id="vg-wk-label"></div>
+            <button id="vg-wk-next">›</button>
+          </div>
+        </div>
+      </div>
+      <div id="viewer-grand-sched-wrap"></div>
     </div>
 
     <!-- MY HOLIDAYS (viewer) -->
@@ -2855,6 +2875,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='org') renderOrgTab();
     if(btn.dataset.tab==='myschedule') renderViewerScheduleTab();
+    if(btn.dataset.tab==='viewer-grand') renderViewerGrandScheduleTab();
     if(btn.dataset.tab==='notifications') renderNotificationsTab();
     if(btn.dataset.tab==='myholidays') renderViewerHolidaysTab();
     if(btn.dataset.tab==='whoson') renderWhosOnTab();
@@ -3530,7 +3551,7 @@ function renderTeamTab(){
           const keepId = (otherContact && otherContact.authUid && !(thisContact && thisContact.authUid)) ? otherId : mid;
           const absorbId = keepId === mid ? otherId : mid;
           const ok = await mergeMembers(keepId, absorbId);
-          if(ok) showToast('Merged into one person');
+          if(ok){ showToast('Merged into one person'); } else { showToast("Couldn't merge — one of these records may already be gone; try refreshing"); }
           renderTeamTab();
           renderTeamsList();
         });
@@ -3546,7 +3567,8 @@ function renderTeamTab(){
     const errorEl = card.querySelector('.email-dupe-error');
     const email = input.value.trim().toLowerCase();
     const mid = card.dataset.mid;
-    const dupe = email && Object.entries(memberContacts).find(([id,c])=> id!==mid && (c.email||'').toLowerCase()===email);
+    const liveMemberIds = new Set(state.members.map(m=>m.id));
+    const dupe = email && Object.entries(memberContacts).find(([id,c])=> id!==mid && liveMemberIds.has(id) && (c.email||'').toLowerCase()===email);
     if(dupe){
       const otherId = dupe[0];
       const other = state.members.find(m=>m.id===otherId);
@@ -3565,7 +3587,7 @@ function renderTeamTab(){
           const keepId = (otherContact && otherContact.authUid && !(thisContact && thisContact.authUid)) ? otherId : mid;
           const absorbId = keepId === mid ? otherId : mid;
           const ok = await mergeMembers(keepId, absorbId);
-          if(ok) showToast('Merged into one person');
+          if(ok){ showToast('Merged into one person'); } else { showToast("Couldn't merge — one of these records may already be gone; try refreshing"); }
           renderTeamTab();
           renderTeamsList();
         });
@@ -8078,6 +8100,19 @@ function renderViewerYourWeekSummary(sched){
   wrap.innerHTML = buildYourWeekTableHtml(sched, viewerWeekMonday, me);
   attachYourWeekClicks(wrap, '#viewer-sched-grid-wrap');
 }
+// A viewer should only ever see: tasks they're actually assigned to this week (their own
+// work), plus tasks explicitly made visible to their level (the same "Also visible to"
+// setting "Who's on" already uses) — never every task on the team unfiltered, which is what
+// the grid used to show regardless of any visibility setting.
+function visibleTasksForViewer(tasks, sched, dates, viewerId){
+  const me = state.members.find(m=>m.id===viewerId);
+  const myLevels = (me && me.levels) || [];
+  return tasks.filter(task=>{
+    const assignedThisWeek = dates.some(d=> ((sched[d]||{})[task.id]||[]).includes(viewerId));
+    const visibleByLevel = task.visibleToLevels && task.visibleToLevels.some(l=>myLevels.includes(l));
+    return assignedThisWeek || visibleByLevel;
+  });
+}
 function drawViewerScheduleGrid(sched){
   const wrap = document.getElementById('viewer-sched-grid-wrap');
   const dates = DAYS.map((d,i)=> iso(addDays(viewerWeekMonday,i)));
@@ -8111,7 +8146,8 @@ function drawViewerScheduleGrid(sched){
     html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}${bdayNames.length?`<span class="bday-indicator" title="${escAttr(bdayNames.join(', '))}">🎂 ${escHtml(bdayNames.join(', '))}</span>`:''}</div></th>`;
   });
   html += '</tr></thead><tbody>';
-  sortedTasksForDisplay(state.tasks).forEach(task=>{
+  const visibleTasks = visibleTasksForViewer(sortedTasksForDisplay(state.tasks), sched, dates, viewerIdentityId);
+  visibleTasks.forEach(task=>{
     html += `<tr><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(task.name)}</span></div></td>`;
     runsFor(task.id).forEach(run=>{
       const span = run.endIdx - run.startIdx + 1;
@@ -8132,6 +8168,87 @@ function drawViewerScheduleGrid(sched){
   html += '</tbody></table>';
   wrap.innerHTML = html;
 }
+let viewerGrandWeekMonday = null;
+async function renderViewerGrandScheduleTab(){
+  if(!viewerGrandWeekMonday) viewerGrandWeekMonday = mondayOf(new Date());
+  document.getElementById('vg-wk-label').textContent = fmtWeek(viewerGrandWeekMonday);
+  const wrap = document.getElementById('viewer-grand-sched-wrap');
+  const note = document.getElementById('viewer-grand-note');
+  const me = state.members.find(m=>m.id===viewerIdentityId);
+  const myTeam = me ? state.teams.find(t=>t.id===me.teamId) : null;
+  if(!myTeam){ wrap.innerHTML = ''; return; }
+  const dept = myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
+  const teamsToShow = (dept && dept.showGrandViews!==false) ? teamsInDepartment(dept.id) : [myTeam];
+  note.textContent = (dept && dept.showGrandViews!==false)
+    ? `${dept.name} combines its teams here — this is every team's week, not just your own. Your own rows are highlighted. Read-only.`
+    : `Your department isn't combining views, so this shows just your own team — same as My Schedule. Your own rows are highlighted. Read-only.`;
+  const weekISO = iso(viewerGrandWeekMonday);
+  const sections = await Promise.all(teamsToShow.map(async team=>{
+    const sched = await loadWeekForTeam(team.id, weekISO);
+    return { team, sched, html: viewerGrandTeamGridHtml(team, sched) };
+  }));
+  wrap.innerHTML = sections.map(s=> teamsToShow.length>1
+    ? `<div class="card" style="overflow-x:auto; margin-bottom:14px;"><h3 style="margin-bottom:10px;">${escHtml(s.team.name)}</h3>${s.html}</div>`
+    : `<div class="card" style="overflow-x:auto;">${s.html}</div>`
+  ).join('');
+}
+function viewerGrandTeamGridHtml(team, sched){
+  const dates = DAYS.map((d,i)=> iso(addDays(viewerGrandWeekMonday,i)));
+  const teamTasks = state.tasksByTeam[team.id] || [];
+  const scopeIds = state.members.filter(m=>m.teamId===team.id).map(m=>m.id);
+  const visibleTasks = visibleTasksForViewer(sortedTasksForDisplay(teamTasks), sched, dates, viewerIdentityId);
+  function runsFor(taskId){
+    const task = teamTasks.find(t=>t.id===taskId);
+    const allowMerge = !!(task && task.sameAllWeek);
+    const runs = [];
+    let i = 0;
+    while(i < DAYS.length){
+      const ids = ((sched[dates[i]]||{})[taskId]) || [];
+      const key = ids.slice().sort().join(',');
+      let j = i;
+      if(key && allowMerge){
+        while(j+1 < DAYS.length){
+          const nextIds = ((sched[dates[j+1]]||{})[taskId]) || [];
+          if(nextIds.slice().sort().join(',') === key) j++; else break;
+        }
+      }
+      runs.push({startIdx:i, endIdx:j, ids, dates:dates.slice(i,j+1)});
+      i = j+1;
+    }
+    return runs;
+  }
+  if(visibleTasks.length===0){
+    return `<div class="muted" style="padding:14px 2px; font-size:12.5px;">Nothing you're assigned to or able to see on ${escHtml(team.name)} this week.</div>`;
+  }
+  let html = '<table class="sched-table"><thead><tr><th style="text-align:left;">Task</th>';
+  DAYS.forEach((d,i)=>{
+    const dt = addDays(viewerGrandWeekMonday,i);
+    const bhName = bankHolidayName(iso(dt));
+    html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}</div></th>`;
+  });
+  html += '</tr></thead><tbody>';
+  visibleTasks.forEach(task=>{
+    html += `<tr><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(task.name)}</span></div></td>`;
+    runsFor(task.id).forEach(run=>{
+      const span = run.endIdx - run.startIdx + 1;
+      const spanned = span > 1;
+      html += `<td ${spanned?`colspan="${span}"`:''} class="${spanned?'spanned-cell':''}"><div class="chipwrap">`;
+      run.ids.forEach(mid=>{
+        const pColor = colorForTeam(team.id);
+        const isMe = mid === viewerIdentityId;
+        html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
+          <span class="bar-name"><span class="bar-name-text">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+        </div></div>`;
+      });
+      html += `</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+document.getElementById('vg-wk-prev').addEventListener('click', ()=>{ viewerGrandWeekMonday = addDays(viewerGrandWeekMonday,-7); renderViewerGrandScheduleTab(); });
+document.getElementById('vg-wk-next').addEventListener('click', ()=>{ viewerGrandWeekMonday = addDays(viewerGrandWeekMonday,7); renderViewerGrandScheduleTab(); });
 document.getElementById('v-wk-prev').addEventListener('click', ()=>{ viewerWeekMonday = addDays(viewerWeekMonday,-7); renderViewerScheduleTab(); });
 document.getElementById('v-wk-next').addEventListener('click', ()=>{ viewerWeekMonday = addDays(viewerWeekMonday,7); renderViewerScheduleTab(); });
 
