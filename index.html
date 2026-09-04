@@ -3360,7 +3360,8 @@ function renderTeamTab(){
   renderStandardTasksByLevelCard();
   const me = currentViewerMember();
   const deptHint = document.getElementById('team-dept-hint');
-  if(deptHint) deptHint.style.display = (me && (me.role==='admin' || me.isAdmin===true)) ? 'block' : 'none';
+  const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
+  if(deptHint) deptHint.style.display = isOrgAdmin ? 'block' : 'none';
   const wrap = document.getElementById('team-table-wrap');
   const label = document.getElementById('people-team-label');
   if(label){ const t = currentTeam(); label.textContent = t ? `— viewing ${t.name}` : ''; }
@@ -3438,7 +3439,7 @@ function renderTeamTab(){
                 <div class="m-level-cell">
                   <label class="chip-check"><input type="radio" name="m-role-${m.id}" class="m-role-pick" value="" ${!m.role?'checked':''}> Viewer</label>
                   <label class="chip-check"><input type="radio" name="m-role-${m.id}" class="m-role-pick" value="manager" ${m.role==='manager'?'checked':''}> Manager</label>
-                  <label class="chip-check"><input type="radio" name="m-role-${m.id}" class="m-role-pick" value="admin" ${m.role==='admin'?'checked':''}> Admin</label>
+                  <label class="chip-check" title="${isOrgAdmin?'':'Only an Admin can grant or change Admin rights'}"><input type="radio" name="m-role-${m.id}" class="m-role-pick" value="admin" ${m.role==='admin'?'checked':''} ${isOrgAdmin?'':'disabled'}> Admin</label>
                 </div>
                 <div class="m-manager-dept-row" style="margin-top:8px; ${m.role==='manager'?'':'display:none;'}">
                   ${state.departments.length===0
