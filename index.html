@@ -3942,7 +3942,13 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
   // Skip anything already on file — pending or registered — so a re-paste or overlapping
   // batch can't silently create a second record sharing the same email. Auto-link matches by
   // email alone, and two unclaimed records with the same address would make that ambiguous.
-  const existingEmails = new Set(Object.values(memberContacts).map(c=>(c.email||'').toLowerCase()).filter(Boolean));
+  const liveMemberIds = new Set(state.members.map(m=>m.id));
+  const existingEmails = new Set(
+    Object.entries(memberContacts)
+      .filter(([mid])=>liveMemberIds.has(mid))
+      .map(([,c])=>(c.email||'').toLowerCase())
+      .filter(Boolean)
+  );
   const toCreate = [], skipped = [];
   const seenThisBatch = new Set();
   rows.forEach(row=>{
