@@ -1744,15 +1744,34 @@ async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
     try{
       const tt = await window.storage.get('tasks_'+teamId, true);
       state.tasksByTeam[teamId] = tt ? JSON.parse(tt.value) : (legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)));
-    }catch(e){ state.tasksByTeam[teamId] = legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)); }
+    }catch(e){
+      // A genuine failure here (network blip, timeout) must never silently substitute a
+      // plausible-looking default in place of this team's real tasks — that's indistinguishable
+      // from actual data loss the moment anything later saves. Leave whatever's already there
+      // (correct, from an earlier successful load) untouched, or leave it unset if this is
+      // truly the first attempt, and surface the failure instead of hiding it.
+      console.error('Could not load tasks for team', teamId, e);
+      lastStorageError = { when: new Date().toLocaleTimeString(), what: `loading tasks for a team — `+(e.message||e.code||e) };
+      storageWorking = false;
+      updateStorageBanner();
+    }
     try{
       const rr = await window.storage.get('weekly_req_'+teamId, true);
       state.reqByTeam[teamId] = rr ? JSON.parse(rr.value) : (legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)));
-    }catch(e){ state.reqByTeam[teamId] = legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)); }
+    }catch(e){
+      console.error('Could not load requirements for team', teamId, e);
+      lastStorageError = { when: new Date().toLocaleTimeString(), what: `loading requirements for a team — `+(e.message||e.code||e) };
+      storageWorking = false;
+      updateStorageBanner();
+    }
     try{
       const rl = await window.storage.get('weekly_req_levels_'+teamId, true);
       state.reqLevelsByTeam[teamId] = rl ? JSON.parse(rl.value) : {};
-    }catch(e){ state.reqLevelsByTeam[teamId] = {}; }
+    }catch(e){
+      console.error('Could not load requirement levels for team', teamId, e);
+      // Not fatal enough to bank its own banner message — reqLevels is a finer-grained
+      // breakdown on top of reqByTeam, safe to leave unset without risking data loss.
+    }
     // Same one-time cleanup as members, but for tasks — a task restricted to (or made visible
     // to) "Manager" as a level would now be impossible to satisfy, since nobody can hold that
     // level anymore. Only persists for teams that actually had something to clean.
