@@ -252,6 +252,7 @@
   .bar .bar-name{ display:flex; align-items:center; justify-content:center; gap:5px; flex:1 1 auto; min-width:0; }
   .team-dot{ width:7px; height:7px; border-radius:50%; border:1.5px solid; flex-shrink:0; }
   .bar .bar-name-text{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bar .bar-name-text.pending{ font-size:11px; opacity:0.85; }
   .bar.short{ box-shadow: inset 0 0 0 2px rgba(255,255,255,0.7); }
   .bar.needs-replace{ box-shadow: 0 0 0 2px var(--brick); }
   .level-shortfall-badge{ display:inline-block; font-size:9.5px; font-weight:700; color:var(--brick-text); background:var(--brick-soft); border-radius:6px; padding:1px 6px; margin-bottom:4px; }
@@ -3426,7 +3427,7 @@ function renderTeamTab(){
       <div class="member-card-head">
         <input type="checkbox" class="card-select-check" data-mid="${m.id}">
         <button class="card-expand-toggle" title="Expand">${chevronSvg}</button>
-        <input type="text" class="m-name" value="${escAttr(m.name)}" placeholder="${m.name?'Name':'Name (set automatically when they join)'}">
+        <input type="text" class="m-name" value="${escAttr(m.name)}" placeholder="${m.name?'Name':escAttr((memberContacts[m.id]&&memberContacts[m.id].email)||'Name (set automatically when they join)')}">
         <div class="member-card-summary">${roleBadge}${pendingInviteBadge}${levelTags}</div>
         <div class="row-actions">
           <button class="btn-remove-x btn-del-member" title="Remove">×</button>
@@ -6247,7 +6248,7 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO){
         const isSick = ((state.holidayReasons[mid]||{})[primaryDate]) === 'sick';
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
           <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${team.name}${isSick?' — out of office, consider replacing':' — click to see options'}">
-            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
+            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">
             <button class="bar-menu-item" data-action="delete">Delete</button>
@@ -6780,9 +6781,20 @@ function memberName(id){ const m=state.members.find(x=>x.id===id); return m?m.na
 // first name — only then does the surname's first initial get appended, so "Titas" stays
 // "Titas" almost everywhere, but becomes "Titas Š." specifically where it would otherwise be
 // ambiguous. Reads straight from the existing full name — no separate field, nothing to migrate.
+// True while someone's real name isn't set yet but shortDisplayName is showing their email
+// prefix instead — used by callers to apply a slightly smaller size, since an email prefix
+// tends to run longer than a first name and would otherwise crowd a compact schedule bar.
+function isPendingDisplayName(memberId){
+  const m = state.members.find(x=>x.id===memberId);
+  return !!(m && !m.name);
+}
 function shortDisplayName(memberId, scopeMemberIds){
   const m = state.members.find(x=>x.id===memberId);
-  if(!m || !m.name) return '(name pending)';
+  if(!m || !m.name){
+    const email = m && memberContacts[memberId] && memberContacts[memberId].email;
+    if(email){ const prefix = email.split('@')[0]; if(prefix) return prefix; }
+    return '(name pending)';
+  }
   const parts = m.name.trim().split(/\s+/).filter(Boolean);
   const firstName = parts[0] || m.name;
   if(parts.length < 2) return firstName; // no surname on file to disambiguate with anyway
@@ -6868,7 +6880,7 @@ function buildScheduleTableHtml(teamId){
         const isSick = run.dates.some(d=> ((state.holidayReasons[mid]||{})[d]) === 'sick');
         html += `<div class="bar-item">
           <button class="bar ${assigned.length>need?'short':''} ${isMe?'me':''} ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${isSick?'Out of office — consider replacing':'Click to see options'}">
-            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">${mainBarMenuHtml()}</div>
         </div>`;
@@ -8158,7 +8170,7 @@ function drawViewerScheduleGrid(sched){
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isMe = mid === viewerIdentityId;
         html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
-          <span class="bar-name"><span class="bar-name-text">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
         </div></div>`;
       });
       html += `</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
@@ -8237,7 +8249,7 @@ function viewerGrandTeamGridHtml(team, sched){
         const pColor = colorForTeam(team.id);
         const isMe = mid === viewerIdentityId;
         html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
-          <span class="bar-name"><span class="bar-name-text">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
         </div></div>`;
       });
       html += `</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
