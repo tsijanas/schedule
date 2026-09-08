@@ -2894,6 +2894,8 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     btn.classList.add('active');
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='org') renderOrgTab();
+    if(btn.dataset.tab==='tasks') renderTasksTab();
+    if(btn.dataset.tab==='requirements') renderReqTab();
     if(btn.dataset.tab==='myschedule') renderViewerScheduleTab();
     if(btn.dataset.tab==='viewer-grand') renderViewerGrandScheduleTab();
     if(btn.dataset.tab==='notifications') renderNotificationsTab();
@@ -7891,6 +7893,11 @@ async function bindIdentityToMember(info){
   await ensureTeamDataLoaded(teamsNeededForViewer(m));
   const mode = (m.isAdmin || m.role==='manager') ? 'admin' : 'viewer';
   setMode(mode);
+  if(mode==='admin'){
+    await loadMemberContactsForAdmin();
+    await renderScheduleTab(); // re-render once contacts are in, so email-prefix names for
+    // not-yet-confirmed people show correctly on the very first paint too
+  }
 }
 
 function revealApp(){
@@ -7898,6 +7905,7 @@ function revealApp(){
   if(cover) cover.remove();
 }
 
+let bindIdentityInFlight = null;
 function startAccessCheck(){
   if(!window.rotaAuth){
     // Firebase failed to load entirely — boot() already replaced #boot-cover with a real
@@ -7911,7 +7919,13 @@ function startAccessCheck(){
       return;
     }
     closePendingModal();
-    await bindIdentityToMember(info);
+    // If a previous firing of this same callback is still in flight (onAuthStateChanged can
+    // genuinely fire more than once during a normal boot), wait for it to fully finish first
+    // rather than letting two calls interleave and race each other's async loads.
+    if(bindIdentityInFlight) await bindIdentityInFlight;
+    bindIdentityInFlight = bindIdentityToMember(info);
+    await bindIdentityInFlight;
+    bindIdentityInFlight = null;
     revealApp();
   });
 }
@@ -8385,11 +8399,6 @@ document.getElementById('v-cal-next').addEventListener('click', ()=>{ viewerCalM
 // ---------- init ----------
 window.__rotaRestart = async function(){
   await loadState();
-  renderTeamSwitcher();
-  await renderOrgTab();
-  renderTeamTab();
-  renderTasksTab();
-  renderReqTab();
   startAccessCheck();
 };
 (async function init(){
