@@ -6336,20 +6336,27 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO){
         const pColor = tc;
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isSick = ((state.holidayReasons[mid]||{})[primaryDate]) === 'sick';
-        // Reuses the schedule data already loaded above (rowTeamData) rather than calling
-        // readWithBorrowedTeamContext, which would redundantly re-fetch this same team's
-        // schedule from scratch for every single person on this row — this just needs
-        // currentTeamId/currentSchedule briefly pointed at the right team, synchronously,
-        // with no network call at all since the data's already sitting right here.
+        // Combines candidates across every team in this shared-task group, not just this one
+        // person's own team — otherwise someone eligible on a different team sharing this same
+        // task would never show up as a replace option here, even though they genuinely are
+        // one. Reuses the schedule data already loaded above (rowTeamData) for each team in the
+        // group rather than calling readWithBorrowedTeamContext, which would redundantly
+        // re-fetch schedules from scratch — this just needs currentTeamId/currentSchedule
+        // briefly pointed at each team in turn, synchronously, with no network calls at all.
         const realTeamId = currentTeamId, realSchedule = currentSchedule;
-        currentTeamId = team.id;
-        currentSchedule = rowTeamData[team.id].sched;
-        const candidates = eligibleMembersForRun(task.id, runDates, assigned.filter(id=>id!==mid));
+        let candidates = [];
+        g.perTeam.forEach(({team:otherTeam, task:otherTask})=>{
+          const otherAssigned = ((rowTeamData[otherTeam.id].sched[primaryDate]||{})[otherTask.id]) || [];
+          currentTeamId = otherTeam.id;
+          currentSchedule = rowTeamData[otherTeam.id].sched;
+          candidates.push(...eligibleMembersForRun(otherTask.id, runDates, otherAssigned.filter(id=>id!==mid)));
+        });
         currentTeamId = realTeamId;
         currentSchedule = realSchedule;
+        const showTeamOnCandidates = g.perTeam.length>1;
         const candidatesHtml = candidates.length===0
           ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-          : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join('');
+          : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})${showTeamOnCandidates?' — '+escHtml(state.teams.find(t=>t.id===m.teamId)?.name||''):''}</button>`).join('');
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
           <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${team.name}${isSick?' — out of office, consider replacing':' — click to see options'}">
             <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
@@ -6434,7 +6441,37 @@ function wireGrandScheduleRow(rowEl){
           await refreshOneGrandScheduleRow(key);
         } else if(action==='replace-with-pick'){
           closeAllBarMenus();
-          await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplaceWithSpecific(taskId, cellDates, mid, btn.dataset.target));
+          const targetId = btn.dataset.target;
+          const targetMember = state.members.find(m=>m.id===targetId);
+          const targetTeamId = targetMember ? targetMember.teamId : teamId;
+          if(targetTeamId === teamId){
+            // Same team as the person being replaced — the simple, single-schedule case.
+            await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplaceWithSpecific(taskId, cellDates, mid, targetId));
+          } else {
+            // Picked from a different team in this shared-task group — two separate schedule
+            // documents are involved, so this can't be a single doReplaceWithSpecific call.
+            // Remove the outgoing person from their own team's slot, then add the incoming
+            // person to their own team's slot — never write someone's assignment onto a
+            // schedule document that isn't actually their own team's.
+            const g = grandTaskGroups(currentDepartmentId)[key];
+            const targetTeamTask = g ? g.perTeam.find(pt=>pt.team.id===targetTeamId)?.task : null;
+            await withBorrowedTeamContext(teamId, grandWeekMonday, async ()=>{
+              cellDates.forEach(dISO=>{
+                currentSchedule[dISO][taskId] = (currentSchedule[dISO][taskId]||[]).filter(x=>x!==mid);
+              });
+              await saveWeek(iso(currentWeekMonday), currentSchedule);
+            });
+            if(targetTeamTask){
+              await withBorrowedTeamContext(targetTeamId, grandWeekMonday, async ()=>{
+                cellDates.forEach(dISO=>{
+                  currentSchedule[dISO][targetTeamTask.id] = currentSchedule[dISO][targetTeamTask.id] || [];
+                  if(!currentSchedule[dISO][targetTeamTask.id].includes(targetId)) currentSchedule[dISO][targetTeamTask.id].push(targetId);
+                });
+                await saveWeek(iso(currentWeekMonday), currentSchedule);
+                balanceCache = null;
+              });
+            }
+          }
           await refreshOneGrandScheduleRow(key);
         }
       });
