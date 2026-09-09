@@ -7494,25 +7494,76 @@ function levelLabel(task){
 
 document.getElementById('wk-prev').addEventListener('click', ()=>{ currentWeekMonday = addDays(currentWeekMonday,-7); renderScheduleTab(); });
 document.getElementById('wk-next').addEventListener('click', ()=>{ currentWeekMonday = addDays(currentWeekMonday,7); renderScheduleTab(); });
-document.getElementById('btn-generate').addEventListener('click', ()=>{
+document.getElementById('btn-generate').addEventListener('click', async ()=>{
   const hasExisting = Object.values(currentSchedule||{}).some(day=> Object.values(day||{}).some(arr=>(arr||[]).length>0));
-  const warning = hasExisting
+  const myTeam = state.teams.find(t=>t.id===currentTeamId);
+  const deptId = myTeam ? myTeam.departmentId : null;
+  let sharedGroups = [];
+  if(deptId){
+    await loadGrandReqTotals(deptId);
+    const allGroups = grandTaskGroups(deptId);
+    sharedGroups = Object.entries(allGroups).filter(([key, g])=>
+      g.perTeam.some(pt=>pt.team.id===currentTeamId)
+      && g.perTeam.length > 1
+      && grandReqTotals[key] && Object.values(grandReqTotals[key]).some(v=>v>0)
+    );
+  }
+  const otherTeamsTouched = new Set();
+  sharedGroups.forEach(([key,g])=> g.perTeam.forEach(pt=>{ if(pt.team.id!==currentTeamId) otherTeamsTouched.add(pt.team.name); }));
+
+  let warning = hasExisting
     ? ` This week already has assignments on it — generating replaces the whole week from scratch, it doesn't just fill in the gaps. Anything already set will be gone unless you undo right after.`
     : '';
+  if(otherTeamsTouched.size>0){
+    warning += ` This team shares ${sharedGroups.length===1?'a task':'tasks'} (rotated department-wide) with ${Array.from(otherTeamsTouched).join(', ')} — generating here will also update their schedules for that shared portion, so everyone stays fairly rotated rather than this team accidentally overriding it with its own numbers alone.`;
+  }
   askConfirm(`Generate the schedule for ${fmtWeek(currentWeekMonday)}?${warning}`, 'Generate schedule', async ()=>{
-    const snapshot = JSON.parse(JSON.stringify(currentSchedule));
+    const genWeekMonday = currentWeekMonday;
+    const excludeTaskNames = new Set(sharedGroups.map(([key])=>key));
+    const snapshots = { [currentTeamId]: JSON.parse(JSON.stringify(currentSchedule)) };
     document.getElementById('sched-status').textContent = 'Generating…';
     balanceCache = null;
-    const sched = await generateWeek(currentWeekMonday);
+    const sched = await generateWeek(genWeekMonday, { excludeTaskNames });
     currentSchedule = sched;
-    const weekISO = iso(currentWeekMonday);
+    const weekISO = iso(genWeekMonday);
     await saveWeek(weekISO, sched);
+
+    if(sharedGroups.length>0){
+      document.getElementById('sched-status').textContent = 'Rotating shared tasks across the department…';
+      const dates = DAYS.map((d,i)=> iso(addDays(genWeekMonday,i)));
+      const allTeamIdsInvolved = new Set();
+      sharedGroups.forEach(([key,g])=> g.perTeam.forEach(pt=> allTeamIdsInvolved.add(pt.team.id)));
+      const teamSchedules = {};
+      for(const tid of allTeamIdsInvolved){
+        teamSchedules[tid] = tid===currentTeamId ? sched : await loadWeekForTeam(tid, weekISO);
+        if(!snapshots[tid]) snapshots[tid] = JSON.parse(JSON.stringify(teamSchedules[tid]));
+      }
+      for(const [key, g] of sharedGroups){
+        const resultsByTeam = await generateSharedTaskPoolForWeek(g, dates, grandReqTotals[key], teamSchedules);
+        for(const {team, task} of g.perTeam){
+          dates.forEach(dISO=>{ teamSchedules[team.id][dISO][task.id] = resultsByTeam[team.id][dISO] || []; });
+        }
+      }
+      for(const tid of allTeamIdsInvolved){
+        await withBorrowedTeamContext(tid, genWeekMonday, async ()=>{
+          currentSchedule = teamSchedules[tid];
+          await saveWeek(weekISO, currentSchedule);
+        });
+      }
+      currentSchedule = teamSchedules[currentTeamId];
+    }
+
     document.getElementById('sched-status').textContent = '';
     balanceCache = null;
     drawScheduleGrid();
     pushUndo(async ()=>{
-      currentSchedule = snapshot;
-      await saveWeek(weekISO, snapshot);
+      for(const [tid, snap] of Object.entries(snapshots)){
+        await withBorrowedTeamContext(tid, genWeekMonday, async ()=>{
+          currentSchedule = snap;
+          await saveWeek(weekISO, snap);
+        });
+      }
+      currentSchedule = snapshots[currentTeamId];
       balanceCache = null;
       drawScheduleGrid();
       showToast('Restored');
