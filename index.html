@@ -5143,6 +5143,16 @@ function grandTaskGroups(deptId){
 }
 let grandReqTotals = {}; // loaded from storage for the current department — the actual fix for the reset-to-0 bug
 let grandReqLevels = {}; // loaded from storage for the current department — mirrors grandReqTotals, but per-level
+async function loadGrandReqTotals(deptId){
+  try{
+    const saved = await window.storage.get('grand_req_'+deptId, true);
+    grandReqTotals = saved ? JSON.parse(saved.value) : {};
+  }catch(e){ grandReqTotals = {}; }
+  try{
+    const savedLv = await window.storage.get('grand_req_levels_'+deptId, true);
+    grandReqLevels = savedLv ? JSON.parse(savedLv.value) : {};
+  }catch(e){ grandReqLevels = {}; }
+}
 async function renderGrandReqTab(){
   const wrap = document.getElementById('grand-req-wrap');
   if(!wrap || !currentDepartmentId) return;
@@ -5152,14 +5162,7 @@ async function renderGrandReqTab(){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No shared task names yet in this department's teams.</div>`;
     return;
   }
-  try{
-    const saved = await window.storage.get('grand_req_'+currentDepartmentId, true);
-    grandReqTotals = saved ? JSON.parse(saved.value) : {};
-  }catch(e){ grandReqTotals = {}; }
-  try{
-    const savedLv = await window.storage.get('grand_req_levels_'+currentDepartmentId, true);
-    grandReqLevels = savedLv ? JSON.parse(savedLv.value) : {};
-  }catch(e){ grandReqLevels = {}; }
+  await loadGrandReqTotals(currentDepartmentId);
 
   const teamSizes = {};
   teamsInDepartment(currentDepartmentId).forEach(t=> teamSizes[t.id] = state.members.filter(m=>m.teamId===t.id).length);
@@ -5586,26 +5589,62 @@ document.getElementById('btn-grand-generate').addEventListener('click', ()=>{
   const teams = teamsInDepartment(currentDepartmentId);
   if(teams.length===0){ showToast('No teams in this department yet'); return; }
   askConfirm(
-    `Generate the schedule for ${fmtWeek(grandWeekMonday)} across every team in this department — ${teams.map(t=>t.name).join(', ')}? This replaces each team's existing schedule for that week from scratch, same as using Generate on their own Schedule tab, just for all of them at once.`,
+    `Generate the schedule for ${fmtWeek(grandWeekMonday)} across every team in this department — ${teams.map(t=>t.name).join(', ')}? This replaces each team's existing schedule for that week from scratch, same as using Generate on their own Schedule tab, just for all of them at once. Any task shared across several of these teams rotates fairly across everyone eligible for it, not just whichever one team it'd otherwise be split onto.`,
     'Generate for all teams',
     async ()=>{
       const statusEl = document.getElementById('grand-sched-status');
       statusEl.textContent = 'Generating…';
       const snapshots = {};
       const weekISO = iso(grandWeekMonday);
+      const dates = DAYS.map((d,i)=> iso(addDays(grandWeekMonday,i)));
+
+      // A shared task only gets the department-wide rotating-pool treatment if there's
+      // actually a department-wide requirement number set for it — otherwise there's nothing
+      // to rotate against, and it falls back to each team's own, independently-set number,
+      // same as before.
+      await loadGrandReqTotals(currentDepartmentId);
+      const allGroups = grandTaskGroups(currentDepartmentId);
+      const sharedGroups = Object.entries(allGroups).filter(([key, g])=>
+        g.perTeam.length > 1 && grandReqTotals[key] && Object.values(grandReqTotals[key]).some(v=>v>0)
+      );
+      const excludeTaskNames = new Set(sharedGroups.map(([key])=>key));
+
       for(const team of teams){
         statusEl.textContent = `Generating — ${team.name}…`;
         await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
           snapshots[team.id] = JSON.parse(JSON.stringify(currentSchedule));
           balanceCache = null;
-          const sched = await generateWeek(grandWeekMonday);
+          const sched = await generateWeek(grandWeekMonday, { excludeTaskNames });
           currentSchedule = sched;
           await saveWeek(iso(currentWeekMonday), sched);
         });
       }
+
+      // Second pass: each shared task's own, real department-wide requirement, rotated fairly
+      // across every team's eligible people at once, then merged into each team's schedule —
+      // reading each team's schedule fresh here so this correctly accounts for what everyone
+      // already picked up in the pass just above.
+      if(sharedGroups.length>0){
+        statusEl.textContent = 'Rotating shared tasks across the department…';
+        const teamSchedules = {};
+        for(const team of teams){ teamSchedules[team.id] = await loadWeekForTeam(team.id, weekISO); }
+        for(const [key, g] of sharedGroups){
+          const resultsByTeam = await generateSharedTaskPoolForWeek(g, dates, grandReqTotals[key], teamSchedules);
+          for(const {team, task} of g.perTeam){
+            dates.forEach(dISO=>{ teamSchedules[team.id][dISO][task.id] = resultsByTeam[team.id][dISO] || []; });
+          }
+        }
+        for(const team of teams){
+          await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
+            currentSchedule = teamSchedules[team.id];
+            await saveWeek(iso(currentWeekMonday), currentSchedule);
+          });
+        }
+      }
+
       statusEl.textContent = '';
       balanceCache = null;
-      logAudit('grand_schedule.generate_all', { department: currentDepartmentId, teams: teams.map(t=>t.name).join(', '), week: weekISO });
+      logAudit('grand_schedule.generate_all', { department: currentDepartmentId, teams: teams.map(t=>t.name).join(', '), week: weekISO, rotatedSharedTasks: sharedGroups.length });
       pushUndo(async ()=>{
         for(const team of teams){
           await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
@@ -6272,6 +6311,20 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO){
         const pColor = tc;
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isSick = ((state.holidayReasons[mid]||{})[primaryDate]) === 'sick';
+        // Reuses the schedule data already loaded above (rowTeamData) rather than calling
+        // readWithBorrowedTeamContext, which would redundantly re-fetch this same team's
+        // schedule from scratch for every single person on this row — this just needs
+        // currentTeamId/currentSchedule briefly pointed at the right team, synchronously,
+        // with no network call at all since the data's already sitting right here.
+        const realTeamId = currentTeamId, realSchedule = currentSchedule;
+        currentTeamId = team.id;
+        currentSchedule = rowTeamData[team.id].sched;
+        const candidates = eligibleMembersForRun(task.id, runDates, assigned.filter(id=>id!==mid));
+        currentTeamId = realTeamId;
+        currentSchedule = realSchedule;
+        const candidatesHtml = candidates.length===0
+          ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
+          : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join('');
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
           <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${team.name}${isSick?' — out of office, consider replacing':' — click to see options'}">
             <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
@@ -6279,7 +6332,8 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO){
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">
             <button class="bar-menu-item" data-action="delete">Delete</button>
             <button class="bar-menu-item" data-action="replace">Replace with next in line</button>
-            <button class="bar-menu-item" data-action="replace-with">Replace with…</button>
+            <div class="bar-menu-section-label">Replace with</div>
+            ${candidatesHtml}
           </div>
         </div>`;
       });
@@ -6353,29 +6407,10 @@ function wireGrandScheduleRow(rowEl){
           closeAllBarMenus();
           await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplace(taskId, cellDates, mid));
           await refreshOneGrandScheduleRow(key);
-        } else if(action==='replace-with'){
-          menu.innerHTML = `<div class="bar-menu-empty">Checking who's available…</div>`;
-          let candidates = [];
-          await withBorrowedTeamContext(teamId, grandWeekMonday, async ()=>{
-            const assigned = ((currentSchedule[cellDates[0]]||{})[taskId]) || [];
-            candidates = eligibleMembersForRun(taskId, cellDates, assigned.filter(id=>id!==mid));
-          });
-          menu.innerHTML = `<button class="bar-menu-item" data-action="replace-with-back">← Back</button>`
-            + (candidates.length===0
-              ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-              : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join(''));
-          menu.querySelectorAll('.bar-menu-item').forEach(newBtn=>{
-            newBtn.addEventListener('click', async (e2)=>{
-              e2.stopPropagation();
-              const act2 = newBtn.dataset.action;
-              if(act2==='replace-with-back'){ await refreshOneGrandScheduleRow(key); }
-              else if(act2==='replace-with-pick'){
-                closeAllBarMenus();
-                await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplaceWithSpecific(taskId, cellDates, mid, newBtn.dataset.target));
-                await refreshOneGrandScheduleRow(key);
-              }
-            });
-          });
+        } else if(action==='replace-with-pick'){
+          closeAllBarMenus();
+          await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplaceWithSpecific(taskId, cellDates, mid, btn.dataset.target));
+          await refreshOneGrandScheduleRow(key);
         }
       });
     });
@@ -6536,6 +6571,90 @@ async function computeBalanceForTeam(teamId){
   return balance;
 }
 
+// Rotates a task shared across several teams fairly across everyone eligible for it,
+// regardless of which of those teams they're actually on — rather than each team only ever
+// drawing from its own, much narrower roster. Deliberately simpler than the main generator:
+// no same-all-week merging, no per-level breakdowns — just per-day requirement, eligibility,
+// holidays, and the same fairness balance, spread across the whole combined pool. teamSchedules
+// must already hold each team's own, already-generated (non-shared) assignments for this same
+// week, so this can correctly account for what everyone's already committed to elsewhere that
+// day before adding a shared-task assignment on top.
+async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSchedules){
+  const nameKey = (g.displayName||'').trim().toLowerCase();
+  const balances = {};
+  for(const {team} of g.perTeam){ balances[team.id] = await computeBalanceForTeam(team.id); }
+
+  // One combined list of every person on any team in this group, each paired with their own
+  // team's copy of this task (since eligibility, levels, and exclusion rules are all still
+  // stored per-team, even though the task name is shared).
+  const pool = [];
+  g.perTeam.forEach(({team, task})=>{
+    state.members.filter(m=>m.teamId===team.id).forEach(m=> pool.push({ member:m, team, task }));
+  });
+
+  const loadByDay = {}; dates.forEach(d=> loadByDay[d] = {});
+  g.perTeam.forEach(({team})=>{
+    const sched = teamSchedules[team.id] || {};
+    dates.forEach(dISO=>{
+      Object.entries(sched[dISO]||{}).forEach(([tid, ids])=>{
+        (ids||[]).forEach(mid=>{
+          loadByDay[dISO][mid] = loadByDay[dISO][mid] || [];
+          loadByDay[dISO][mid].push(tid);
+        });
+      });
+    });
+  });
+  function existingLoad(mid, d){ return loadByDay[d][mid] || []; }
+  function canAssign(entry, dISO){
+    const existing = existingLoad(entry.member.id, dISO);
+    if(existing.includes(entry.task.id)) return false;
+    if(existing.length >= MAX_TASKS_PER_DAY) return false;
+    const teamTasks = state.tasksByTeam[entry.team.id] || [];
+    if(entry.task.excludes && existing.includes(entry.task.excludes)) return false;
+    return !existing.some(tid=>{
+      const et = teamTasks.find(t=>t.id===tid);
+      return et && et.excludes === entry.task.id;
+    });
+  }
+  function markAssigned(entry, dISO){
+    loadByDay[dISO][entry.member.id] = loadByDay[dISO][entry.member.id] || [];
+    loadByDay[dISO][entry.member.id].push(entry.task.id);
+    const b = balances[entry.team.id];
+    b[entry.member.id] = b[entry.member.id] || {};
+    b[entry.member.id][entry.task.id] = (b[entry.member.id][entry.task.id]||0) + 1;
+  }
+  function balanceFor(entry){ return (balances[entry.team.id]?.[entry.member.id]?.[entry.task.id]) || 0; }
+
+  const resultsByTeam = {};
+  g.perTeam.forEach(({team})=> resultsByTeam[team.id] = {});
+
+  dates.forEach(dISO=>{
+    const dayKey = DAYS[dates.indexOf(dISO)];
+    if(isBankHoliday(dISO) || (grandReqForKey[dayKey]||0)<=0){
+      g.perTeam.forEach(({team})=> resultsByTeam[team.id][dISO] = []);
+      return;
+    }
+    const need = grandReqForKey[dayKey];
+    let candidates = pool.filter(entry=>
+      !isOnHoliday(entry.member.id, dISO) && entry.member.eligibility[entry.task.id]
+      && levelAllowed(entry.task, entry.member.levels) && canAssign(entry, dISO)
+    );
+    candidates.sort((a,b)=>{
+      const loadA = existingLoad(a.member.id, dISO).length, loadB = existingLoad(b.member.id, dISO).length;
+      if(loadA!==loadB) return loadA-loadB;
+      const ca = balanceFor(a), cb = balanceFor(b);
+      if(ca!==cb) return ca-cb;
+      return a.member.name.localeCompare(b.member.name);
+    });
+    candidates = shuffleTiedGroups(candidates, entry=> `${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
+    const picked = candidates.slice(0, need);
+    picked.forEach(entry=> markAssigned(entry, dISO));
+    g.perTeam.forEach(({team})=>{
+      resultsByTeam[team.id][dISO] = picked.filter(entry=>entry.team.id===team.id).map(entry=>entry.member.id);
+    });
+  });
+  return resultsByTeam; // { teamId: { dateISO: [memberId, ...] } }
+}
 async function generateWeek(weekMon, opts){
   opts = opts || {};
   const mode = opts.mode || 'full'; // 'full' | 'fill' | 'update'
@@ -6593,7 +6712,12 @@ async function generateWeek(weekMon, opts){
     return kept;
   }
 
-  const tasksSorted = [...state.tasks].sort((a,b)=> eligibleCount(a)-eligibleCount(b));
+  // Grand Schedule's Generate uses this to skip a shared task on this team's own run
+  // entirely — that task gets handled once, separately, across the whole department's
+  // pool of eligible people instead, so it's never assigned twice or left to only this
+  // one team's own (much narrower) candidate pool.
+  const excludeNames = opts.excludeTaskNames || new Set();
+  const tasksSorted = [...state.tasks].filter(t=> !excludeNames.has((t.name||'').trim().toLowerCase())).sort((a,b)=> eligibleCount(a)-eligibleCount(b));
   const weeklyTasks = tasksSorted.filter(t=>t.sameAllWeek);
   const normalTasks = tasksSorted.filter(t=>!t.sameAllWeek);
 
