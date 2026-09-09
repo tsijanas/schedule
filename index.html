@@ -276,6 +276,16 @@
   .bar-menu-item:hover{ background:rgba(0,0,0,0.08); }
   .bar-menu-item[data-action="delete"]{ color:var(--brick-text); }
   .bar-menu-item[data-action="delete"]:hover{ background:rgba(138,58,30,0.14); }
+  .bar-menu-submenu-wrap{ position:relative; }
+  .bar-menu-item-parent{ display:flex; align-items:center; justify-content:space-between; gap:6px; cursor:pointer; }
+  .submenu-arrow{ opacity:0.6; flex-shrink:0; }
+  .bar-submenu{
+    display:none; position:absolute; left:100%; top:-1px; min-width:180px; max-width:240px;
+    background:inherit; border-radius:14px; box-shadow:var(--shadow); overflow:hidden; z-index:21;
+  }
+  .bar-menu-submenu-wrap:hover .bar-submenu,
+  .bar-menu-submenu-wrap.touch-open .bar-submenu{ display:block; }
+  .bar-menu-empty{ padding:9px 13px; font-size:12px; color:var(--ink-faint); font-style:italic; }
   .add-select{ margin-top:4px; opacity:0.45; transition:opacity 0.15s ease; display:flex; justify-content:center; }
   .btn-remove-x{
     width:26px; height:26px; border-radius:50%; border:1px solid var(--brick);
@@ -6358,7 +6368,7 @@ function wireGrandScheduleRow(rowEl){
           menu.innerHTML = `<button class="bar-menu-item" data-action="replace-with-back">← Back</button>`
             + (candidates.length===0
               ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-              : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name)} (${(m.levels||[]).join('/')})</button>`).join(''));
+              : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join(''));
           menu.querySelectorAll('.bar-menu-item').forEach(newBtn=>{
             newBtn.addEventListener('click', async (e2)=>{
               e2.stopPropagation();
@@ -6903,7 +6913,7 @@ function buildScheduleTableHtml(teamId){
           <button class="bar ${assigned.length>need?'short':''} ${isMe?'me':''} ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${isSick?'Out of office — consider replacing':'Click to see options'}">
             <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
           </button>
-          <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">${mainBarMenuHtml()}</div>
+          <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">${mainBarMenuHtml(task.id, run.dates, mid, assigned)}</div>
         </div>`;
       });
       html += `</div>`;
@@ -6962,54 +6972,62 @@ document.addEventListener('click', (e)=>{
   if(!e.target.closest('.bar-menu') && !e.target.closest('.bar')) closeAllBarMenus();
 });
 // Delete removes the person outright; Replace swaps them for whoever's next in the rotation
-// for that exact task (lowest worked-count among eligible, available people).
-function mainBarMenuHtml(){
+// for that exact task (lowest worked-count among eligible, available people). "Replace with…"
+// is a true nested submenu — candidates are computed once, right here, and embedded directly,
+// so hovering it reveals the picker immediately rather than needing a click to first swap the
+// menu's own content before a second click can actually select anyone.
+function mainBarMenuHtml(taskId, cellDates, excludeMid, currentlyAssigned){
+  const candidates = eligibleMembersForRun(taskId, cellDates, (currentlyAssigned||[]).filter(id=>id!==excludeMid));
+  const submenuHtml = candidates.length===0
+    ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
+    : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join('');
   return `<button class="bar-menu-item" data-action="delete">Delete</button>
     <button class="bar-menu-item" data-action="replace">Replace with next in line</button>
-    <button class="bar-menu-item" data-action="replace-with">Replace with…</button>`;
+    <div class="bar-menu-submenu-wrap">
+      <div class="bar-menu-item bar-menu-item-parent">Replace with… <span class="submenu-arrow">▸</span></div>
+      <div class="bar-submenu">${submenuHtml}</div>
+    </div>`;
 }
 // Handles all three bar-menu actions, including swapping the menu's own content to show a
-// specific-person picker (and back again) — re-called after that swap since the buttons
-// inside the menu are replaced, not just their handlers.
-function wireBarMenus(wrap){
-  wrap.querySelectorAll('.bar-menu').forEach(menu=>{
-    menu.querySelectorAll('.bar-menu-item').forEach(btn=>{
-      btn.addEventListener('click', async (e)=>{
-        e.stopPropagation();
-        const td = btn.closest('td');
-        const taskId = td.dataset.task;
-        const mid = menu.dataset.mid;
-        const cellDates = td.dataset.dates.split(',');
-        const action = btn.dataset.action;
-        if(action==='delete'){
-          closeAllBarMenus();
-          cellDates.forEach(dISO=>{
-            currentSchedule[dISO][taskId] = (currentSchedule[dISO][taskId]||[]).filter(x=>x!==mid);
-          });
-          await saveWeek(iso(currentWeekMonday), currentSchedule);
-          balanceCache = null;
-          drawScheduleGrid();
-        } else if(action==='replace'){
-          closeAllBarMenus();
-          await doReplace(taskId, cellDates, mid);
-        } else if(action==='replace-with'){
-          const assigned = ((currentSchedule[cellDates[0]]||{})[taskId]) || [];
-          const candidates = eligibleMembersForRun(taskId, cellDates, assigned.filter(id=>id!==mid));
-          menu.innerHTML = `<button class="bar-menu-item" data-action="replace-with-back">← Back</button>`
-            + (candidates.length===0
-              ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-              : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name)} (${(m.levels||[]).join('/')})</button>`).join(''));
-          wireBarMenus(wrap); // menu content changed — rewire just this menu's new buttons
-        } else if(action==='replace-with-back'){
-          menu.innerHTML = mainBarMenuHtml();
-          wireBarMenus(wrap);
-        } else if(action==='replace-with-pick'){
-          closeAllBarMenus();
-          await doReplaceWithSpecific(taskId, cellDates, mid, btn.dataset.target);
-        }
-      });
+// specific-person picker (and back again).
+function wireOneBarMenu(menu){
+  menu.querySelectorAll('.bar-menu-item').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const td = btn.closest('td');
+      const taskId = td.dataset.task;
+      const mid = menu.dataset.mid;
+      const cellDates = td.dataset.dates.split(',');
+      const action = btn.dataset.action;
+      if(btn.classList.contains('bar-menu-item-parent')){
+        // Touch devices have no hover at all — this is the fallback that makes the submenu
+        // reachable there too, toggled open on tap instead of relying on a mouse hovering it.
+        e.preventDefault();
+        const submenuWrap = btn.closest('.bar-menu-submenu-wrap');
+        if(submenuWrap) submenuWrap.classList.toggle('touch-open');
+        return;
+      }
+      if(action==='delete'){
+        closeAllBarMenus();
+        cellDates.forEach(dISO=>{
+          currentSchedule[dISO][taskId] = (currentSchedule[dISO][taskId]||[]).filter(x=>x!==mid);
+        });
+        await saveWeek(iso(currentWeekMonday), currentSchedule);
+        balanceCache = null;
+        drawScheduleGrid();
+      } else if(action==='replace'){
+        closeAllBarMenus();
+        await doReplace(taskId, cellDates, mid);
+      } else if(action==='replace-with-pick'){
+        closeAllBarMenus();
+        await doReplaceWithSpecific(taskId, cellDates, mid, btn.dataset.target);
+      }
     });
   });
+}
+// Wires every bar-menu within a container — used once, for the initial grid draw.
+function wireBarMenus(wrap){
+  wrap.querySelectorAll('.bar-menu').forEach(menu=> wireOneBarMenu(menu));
 }
 // Every task-group a person is currently on this week, grouped by task (not by single day) —
 // matches the cellDates shape doReplace/doReplaceWithSpecific already expect, so a bulk
@@ -7792,24 +7810,36 @@ function showNameConfirmScreen(m, suggestedName){
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving…';
       const fullName = `${first} ${last}`;
-      try{
-        // Deliberately NOT persistMembers() here — that writes the whole member document via
-        // setDoc, and the rule permitting this exact write requires the diff to touch nothing
-        // but name. A dedicated, minimal updateDoc can never accidentally include another
-        // field, so it can't silently fail the same way a full-document write could.
-        const { db, doc, updateDoc } = window.rotaDb;
-        await updateDoc(doc(db, 'app_members', m.id), { name: fullName });
-        m.name = fullName;
-        membersSyncSnapshot.set(m.id, memberContentString(m)); // keep persistMembers' own change-detection in sync, so it doesn't try to re-write this same field later and hit the same rule
-        modal.classList.remove('open');
-        resolve();
-      }catch(e){
-        console.error('[name confirm] save failed:', e);
-        if(errorEl){ errorEl.textContent = "Couldn't save — please try again."; errorEl.style.display = 'block'; }
-      }finally{
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Continue';
+      const { db, doc, updateDoc } = window.rotaDb;
+      // Retries a few times with a short delay before ever showing an error — this save
+      // depends on claimed_links, written moments earlier in resolveAccess as part of this
+      // same first-ever login, and that write occasionally hasn't fully propagated yet by the
+      // time this permission check runs. A brief pause and retry smooths that over invisibly,
+      // rather than the person having to notice the failure and manually refresh themselves.
+      let lastError = null;
+      for(let attempt=0; attempt<3; attempt++){
+        if(attempt>0) await new Promise(r=>setTimeout(r, 800));
+        try{
+          // Deliberately NOT persistMembers() here — that writes the whole member document via
+          // setDoc, and the rule permitting this exact write requires the diff to touch nothing
+          // but name. A dedicated, minimal updateDoc can never accidentally include another
+          // field, so it can't silently fail the same way a full-document write could.
+          await updateDoc(doc(db, 'app_members', m.id), { name: fullName });
+          m.name = fullName;
+          membersSyncSnapshot.set(m.id, memberContentString(m)); // keep persistMembers' own change-detection in sync, so it doesn't try to re-write this same field later and hit the same rule
+          modal.classList.remove('open');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Continue';
+          resolve();
+          return;
+        }catch(e){
+          lastError = e;
+          console.error(`[name confirm] save attempt ${attempt+1} failed:`, e);
+        }
       }
+      if(errorEl){ errorEl.textContent = "Couldn't save — please try again."; errorEl.style.display = 'block'; }
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Continue';
     };
     submitBtn.addEventListener('click', onSubmit);
   });
@@ -8225,46 +8255,46 @@ async function renderViewerGrandScheduleTab(){
   const dept = myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
   const teamsToShow = (dept && dept.showGrandViews!==false) ? teamsInDepartment(dept.id) : [myTeam];
   note.textContent = (dept && dept.showGrandViews!==false)
-    ? `${dept.name} combines its teams here — this is every team's week, not just your own. Your own rows are highlighted. Read-only.`
+    ? `${dept.name} combines its teams here — this is every team's week, not just your own, laid out the same way a manager sees it. Your own rows are highlighted. Read-only.`
     : `Your department isn't combining views, so this shows just your own team — same as My Schedule. Your own rows are highlighted. Read-only.`;
   const weekISO = iso(viewerGrandWeekMonday);
-  const sections = await Promise.all(teamsToShow.map(async team=>{
-    const sched = await loadWeekForTeam(team.id, weekISO);
-    return { team, sched, html: viewerGrandTeamGridHtml(team, sched) };
-  }));
-  wrap.innerHTML = sections.map(s=> teamsToShow.length>1
-    ? `<div class="card" style="overflow-x:auto; margin-bottom:14px;"><h3 style="margin-bottom:10px;">${escHtml(s.team.name)}</h3>${s.html}</div>`
-    : `<div class="card" style="overflow-x:auto;">${s.html}</div>`
-  ).join('');
-}
-function viewerGrandTeamGridHtml(team, sched){
   const dates = DAYS.map((d,i)=> iso(addDays(viewerGrandWeekMonday,i)));
-  const teamTasks = state.tasksByTeam[team.id] || [];
-  const scopeIds = state.members.filter(m=>m.teamId===team.id).map(m=>m.id);
-  const visibleTasks = visibleTasksForViewer(sortedTasksForDisplay(teamTasks), sched, dates, viewerIdentityId);
-  function runsFor(taskId){
-    const task = teamTasks.find(t=>t.id===taskId);
-    const allowMerge = !!(task && task.sameAllWeek);
-    const runs = [];
-    let i = 0;
-    while(i < DAYS.length){
-      const ids = ((sched[dates[i]]||{})[taskId]) || [];
-      const key = ids.slice().sort().join(',');
-      let j = i;
-      if(key && allowMerge){
-        while(j+1 < DAYS.length){
-          const nextIds = ((sched[dates[j+1]]||{})[taskId]) || [];
-          if(nextIds.slice().sort().join(',') === key) j++; else break;
-        }
-      }
-      runs.push({startIdx:i, endIdx:j, ids, dates:dates.slice(i,j+1)});
-      i = j+1;
-    }
-    return runs;
+
+  // Same grouping the admin's own Grand Schedule uses — one row per task name, merging every
+  // team that has it, rather than a separate section per team. Load each team's actual week
+  // once, up front, so every row can reuse it instead of re-fetching per row.
+  const scheds = {};
+  for(const team of teamsToShow){ scheds[team.id] = await loadWeekForTeam(team.id, weekISO); }
+  const groups = {};
+  teamsToShow.forEach(team=>{
+    (state.tasksByTeam[team.id]||[]).forEach(task=>{
+      const key = (task.name||'').trim().toLowerCase();
+      if(!key) return;
+      if(!groups[key]) groups[key] = { displayName: task.name, perTeam: [] };
+      groups[key].perTeam.push({ team, task });
+    });
+  });
+
+  // A task-group is visible to this viewer if they're assigned to it (on any team it appears
+  // on) this week, or it's marked visible to their level on any of those teams — same rule as
+  // My Schedule, just evaluated once per merged group rather than per team.
+  const myLevels = (me && me.levels) || [];
+  const visibleKeys = Object.keys(groups).filter(key=>{
+    const g = groups[key];
+    return g.perTeam.some(({team, task})=>{
+      const sched = scheds[team.id];
+      const assignedThisWeek = dates.some(d=> ((sched[d]||{})[task.id]||[]).includes(viewerIdentityId));
+      const visibleByLevel = task.visibleToLevels && task.visibleToLevels.some(l=>myLevels.includes(l));
+      return assignedThisWeek || visibleByLevel;
+    });
+  }).sort();
+
+  if(visibleKeys.length===0){
+    wrap.innerHTML = `<div class="card"><div class="muted" style="padding:14px 2px; font-size:12.5px;">Nothing you're assigned to or able to see this week.</div></div>`;
+    return;
   }
-  if(visibleTasks.length===0){
-    return `<div class="muted" style="padding:14px 2px; font-size:12.5px;">Nothing you're assigned to or able to see on ${escHtml(team.name)} this week.</div>`;
-  }
+
+  const scopeIds = state.members.filter(m=> teamsToShow.some(t=>t.id===m.teamId)).map(m=>m.id);
   let html = '<table class="sched-table"><thead><tr><th style="text-align:left;">Task</th>';
   DAYS.forEach((d,i)=>{
     const dt = addDays(viewerGrandWeekMonday,i);
@@ -8272,24 +8302,56 @@ function viewerGrandTeamGridHtml(team, sched){
     html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}</div></th>`;
   });
   html += '</tr></thead><tbody>';
-  visibleTasks.forEach(task=>{
-    html += `<tr><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(task.name)}</span></div></td>`;
-    runsFor(task.id).forEach(run=>{
-      const span = run.endIdx - run.startIdx + 1;
-      const spanned = span > 1;
-      html += `<td ${spanned?`colspan="${span}"`:''} class="${spanned?'spanned-cell':''}"><div class="chipwrap">`;
-      run.ids.forEach(mid=>{
-        const pColor = colorForTeam(team.id);
+  visibleKeys.forEach(key=>{
+    const g = groups[key];
+    html += viewerGrandTaskRowHtml(g, scheds, dates, scopeIds);
+  });
+  html += '</tbody></table>';
+  wrap.innerHTML = `<div class="card" style="overflow-x:auto;">${html}</div>`;
+}
+function viewerGrandTaskRowHtml(g, scheds, dates, scopeIds){
+  const allSameAllWeek = g.perTeam.length>0 && g.perTeam.every(({task})=>task.sameAllWeek);
+  const runs = [];
+  if(allSameAllWeek){
+    let i = 0;
+    while(i < dates.length){
+      const key = g.perTeam.map(({team,task})=>{
+        const ids = ((scheds[team.id][dates[i]]||{})[task.id]) || [];
+        return ids.slice().sort().join(',');
+      }).join('|');
+      let j = i;
+      while(j+1 < dates.length){
+        const nextKey = g.perTeam.map(({team,task})=>{
+          const ids = ((scheds[team.id][dates[j+1]]||{})[task.id]) || [];
+          return ids.slice().sort().join(',');
+        }).join('|');
+        if(nextKey === key) j++; else break;
+      }
+      runs.push({startIdx:i, endIdx:j});
+      i = j+1;
+    }
+  } else {
+    dates.forEach((d,i)=> runs.push({startIdx:i, endIdx:i}));
+  }
+  let html = `<tr><td class="taskname" title="${escAttr(g.displayName)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(g.displayName)}</span></div></td>`;
+  runs.forEach(run=>{
+    const span = run.endIdx - run.startIdx + 1;
+    const spanned = span > 1;
+    const primaryDate = dates[run.startIdx];
+    let bars = '';
+    g.perTeam.forEach(({team, task})=>{
+      const assigned = ((scheds[team.id][primaryDate]||{})[task.id]) || [];
+      const pColor = colorForTeam(team.id);
+      assigned.forEach(mid=>{
         const isMe = mid === viewerIdentityId;
-        html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
+        bars += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};" title="${escAttr(team.name)}">
           <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
         </div></div>`;
       });
-      html += `</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
     });
-    html += '</tr>';
+    html += `<td ${spanned?`colspan="${span}"`:''} class="${spanned?'spanned-cell':''}"><div class="chipwrap">${bars}</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
   });
-  html += '</tbody></table>';
+  html += '</tr>';
   return html;
 }
 document.getElementById('vg-wk-prev').addEventListener('click', ()=>{ viewerGrandWeekMonday = addDays(viewerGrandWeekMonday,-7); renderViewerGrandScheduleTab(); });
