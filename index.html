@@ -6690,6 +6690,42 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
   const resultsByTeam = {};
   g.perTeam.forEach(({team})=> resultsByTeam[team.id] = {});
 
+  // Same convention buildGrandScheduleRowHtml already uses: every team's own copy of this
+  // shared task has to agree it's same-all-week for the group to be treated that way.
+  const isSameAllWeek = g.perTeam.length>0 && g.perTeam.every(({task})=>task.sameAllWeek);
+
+  if(isSameAllWeek){
+    const neededDays = dates.filter(d=>{
+      const dayKey = DAYS[dates.indexOf(d)];
+      return !isBankHoliday(d) && (grandReqForKey[dayKey]||0) > 0;
+    });
+    if(neededDays.length===0){
+      dates.forEach(dISO=> g.perTeam.forEach(({team})=> resultsByTeam[team.id][dISO] = []));
+      return resultsByTeam;
+    }
+    const need = Math.max(...neededDays.map(d=> grandReqForKey[DAYS[dates.indexOf(d)]]));
+    let candidates = pool.filter(entry=>
+      entry.member.eligibility[entry.task.id] && levelAllowed(entry.task, entry.member.levels)
+      && neededDays.every(dISO=> !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO))
+    );
+    candidates.sort((a,b)=>{
+      const ca = balanceFor(a), cb = balanceFor(b);
+      if(ca!==cb) return ca-cb;
+      return a.member.name.localeCompare(b.member.name);
+    });
+    candidates = shuffleTiedGroups(candidates, entry=> balanceFor(entry));
+    const picked = candidates.slice(0, need);
+    neededDays.forEach(dISO=> picked.forEach(entry=> markAssigned(entry, dISO)));
+    dates.forEach(dISO=>{
+      g.perTeam.forEach(({team})=>{
+        resultsByTeam[team.id][dISO] = neededDays.includes(dISO)
+          ? picked.filter(entry=>entry.team.id===team.id).map(entry=>entry.member.id)
+          : [];
+      });
+    });
+    return resultsByTeam;
+  }
+
   dates.forEach(dISO=>{
     const dayKey = DAYS[dates.indexOf(dISO)];
     if(isBankHoliday(dISO) || (grandReqForKey[dayKey]||0)<=0){
