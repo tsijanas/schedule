@@ -264,7 +264,7 @@
   @keyframes gridFlash{ 0%{ box-shadow:0 0 0 3px var(--gold); } 100%{ box-shadow:0 0 0 0px transparent; } }
   .bar-menu{
     display:none; position:relative; width:100%; margin-top:4px; z-index:20;
-    border-radius:14px; box-shadow:var(--shadow); overflow:hidden;
+    border-radius:14px; box-shadow:var(--shadow); overflow-x:hidden; overflow-y:auto; max-height:280px;
     animation: barMenuGrow 0.13s ease-out;
   }
   @keyframes barMenuGrow{ 0%{ opacity:0; transform:scaleY(0.85); transform-origin:top; } 100%{ opacity:1; transform:scaleY(1); } }
@@ -276,15 +276,10 @@
   .bar-menu-item:hover{ background:rgba(0,0,0,0.08); }
   .bar-menu-item[data-action="delete"]{ color:var(--brick-text); }
   .bar-menu-item[data-action="delete"]:hover{ background:rgba(138,58,30,0.14); }
-  .bar-menu-submenu-wrap{ position:relative; }
-  .bar-menu-item-parent{ display:flex; align-items:center; justify-content:space-between; gap:6px; cursor:pointer; }
-  .submenu-arrow{ opacity:0.6; flex-shrink:0; }
-  .bar-submenu{
-    display:none; position:absolute; left:100%; top:-1px; min-width:180px; max-width:240px;
-    background:inherit; border-radius:14px; box-shadow:var(--shadow); overflow:hidden; z-index:21;
+  .bar-menu-section-label{
+    padding:6px 13px 3px; font-size:10.5px; font-weight:700; color:var(--ink-faint);
+    text-transform:uppercase; letter-spacing:0.03em; border-top:1px solid rgba(0,0,0,0.08); margin-top:2px;
   }
-  .bar-menu-submenu-wrap:hover .bar-submenu,
-  .bar-menu-submenu-wrap.touch-open .bar-submenu{ display:block; }
   .bar-menu-empty{ padding:9px 13px; font-size:12px; color:var(--ink-faint); font-style:italic; }
   .add-select{ margin-top:4px; opacity:0.45; transition:opacity 0.15s ease; display:flex; justify-content:center; }
   .btn-remove-x{
@@ -6972,21 +6967,19 @@ document.addEventListener('click', (e)=>{
   if(!e.target.closest('.bar-menu') && !e.target.closest('.bar')) closeAllBarMenus();
 });
 // Delete removes the person outright; Replace swaps them for whoever's next in the rotation
-// for that exact task (lowest worked-count among eligible, available people). "Replace with…"
-// is a true nested submenu — candidates are computed once, right here, and embedded directly,
-// so hovering it reveals the picker immediately rather than needing a click to first swap the
-// menu's own content before a second click can actually select anyone.
+// for that exact task (lowest worked-count among eligible, available people). Candidates for
+// a specific swap are computed once, right here, and shown flat in this same menu — no nested
+// submenu, since one would get visually clipped by the schedule grid's own horizontal-scroll
+// container (overflow-x:auto), which cuts off anything positioned to escape sideways past it.
 function mainBarMenuHtml(taskId, cellDates, excludeMid, currentlyAssigned){
   const candidates = eligibleMembersForRun(taskId, cellDates, (currentlyAssigned||[]).filter(id=>id!==excludeMid));
-  const submenuHtml = candidates.length===0
+  const candidatesHtml = candidates.length===0
     ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
     : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join('');
   return `<button class="bar-menu-item" data-action="delete">Delete</button>
     <button class="bar-menu-item" data-action="replace">Replace with next in line</button>
-    <div class="bar-menu-submenu-wrap">
-      <div class="bar-menu-item bar-menu-item-parent">Replace with… <span class="submenu-arrow">▸</span></div>
-      <div class="bar-submenu">${submenuHtml}</div>
-    </div>`;
+    <div class="bar-menu-section-label">Replace with</div>
+    ${candidatesHtml}`;
 }
 // Handles all three bar-menu actions, including swapping the menu's own content to show a
 // specific-person picker (and back again).
@@ -6999,14 +6992,6 @@ function wireOneBarMenu(menu){
       const mid = menu.dataset.mid;
       const cellDates = td.dataset.dates.split(',');
       const action = btn.dataset.action;
-      if(btn.classList.contains('bar-menu-item-parent')){
-        // Touch devices have no hover at all — this is the fallback that makes the submenu
-        // reachable there too, toggled open on tap instead of relying on a mouse hovering it.
-        e.preventDefault();
-        const submenuWrap = btn.closest('.bar-menu-submenu-wrap');
-        if(submenuWrap) submenuWrap.classList.toggle('touch-open');
-        return;
-      }
       if(action==='delete'){
         closeAllBarMenus();
         cellDates.forEach(dISO=>{
