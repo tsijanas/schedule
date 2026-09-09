@@ -3526,7 +3526,7 @@ function renderTeamTab(){
   });
   enhanceSelectsIn(wrap);
   function readRow(card){
-    const name = card.querySelector('.m-name').value.trim() || 'New person';
+    const name = card.querySelector('.m-name').value.trim();
     const levels = Array.from(card.querySelectorAll('.m-level-check:checked')).map(c=>c.value);
     const roleInput = card.querySelector('.m-role-pick:checked');
     const role = roleInput && roleInput.value ? roleInput.value : null;
@@ -3558,12 +3558,13 @@ function renderTeamTab(){
       badge.remove();
     }
   }
-  function checkNameDupe(card){
+  function checkNameDupe(card, nameMap){
     const input = card.querySelector('.m-name');
     const errorEl = card.querySelector('.name-dupe-error');
     const name = input.value.trim().toLowerCase();
     const mid = card.dataset.mid;
-    const dupe = name && state.members.find(m=> m.id!==mid && (m.name||'').trim().toLowerCase()===name);
+    const otherIds = name ? (nameMap.get(name)||[]).filter(id=>id!==mid) : [];
+    const dupe = otherIds.length>0 ? state.members.find(m=>m.id===otherIds[0]) : null;
     if(dupe){
       const otherId = dupe.id;
       errorEl.innerHTML = `Someone on this team is already named "${escHtml(dupe.name)}" `
@@ -3589,15 +3590,15 @@ function renderTeamTab(){
     errorEl.classList.remove('show');
     return false;
   }
-  function checkEmailDupe(card){
+  function checkEmailDupe(card, emailMap){
     const input = card.querySelector('.m-email');
     const errorEl = card.querySelector('.email-dupe-error');
     const email = input.value.trim().toLowerCase();
     const mid = card.dataset.mid;
-    const liveMemberIds = new Set(state.members.map(m=>m.id));
-    const dupe = email && Object.entries(memberContacts).find(([id,c])=> id!==mid && liveMemberIds.has(id) && (c.email||'').toLowerCase()===email);
+    const otherIds = email ? (emailMap.get(email)||[]).filter(id=>id!==mid) : [];
+    const dupe = otherIds.length>0 ? otherIds[0] : null;
     if(dupe){
-      const otherId = dupe[0];
+      const otherId = dupe;
       const other = state.members.find(m=>m.id===otherId);
       errorEl.innerHTML = `${escHtml(other?other.name:'Someone else')} already uses this email `
         + `<button type="button" class="link-inline btn-merge-dupe" data-other="${otherId}">Merge into one person</button>`;
@@ -3626,17 +3627,40 @@ function renderTeamTab(){
     input.classList.remove('field-invalid');
     return false;
   }
-  function refreshDupeState(card){
-    const hasEmailDupe = checkEmailDupe(card);
-    const hasNameDupe = checkNameDupe(card);
+  function refreshDupeState(card, nameMap, emailMap){
+    const hasEmailDupe = checkEmailDupe(card, emailMap);
+    const hasNameDupe = checkNameDupe(card, nameMap);
     markDupeBadge(card, hasEmailDupe || hasNameDupe);
   }
+  function buildNameMap(){
+    const m = new Map();
+    state.members.forEach(mem=>{
+      const key = (mem.name||'').trim().toLowerCase();
+      if(!key) return;
+      if(!m.has(key)) m.set(key, []);
+      m.get(key).push(mem.id);
+    });
+    return m;
+  }
+  function buildEmailMap(){
+    const m = new Map();
+    const liveMemberIds = new Set(state.members.map(mem=>mem.id));
+    Object.entries(memberContacts).forEach(([id,c])=>{
+      if(!liveMemberIds.has(id)) return;
+      const key = (c.email||'').trim().toLowerCase();
+      if(!key) return;
+      if(!m.has(key)) m.set(key, []);
+      m.get(key).push(id);
+    });
+    return m;
+  }
+  const nameMap = buildNameMap(), emailMap = buildEmailMap();
   wrap.querySelectorAll('.member-card').forEach(card=>{
-    refreshDupeState(card); // catch anything already conflicting on load
+    refreshDupeState(card, nameMap, emailMap); // catch anything already conflicting on load
     const emailInput = card.querySelector('.m-email');
     const nameInput = card.querySelector('.m-name');
-    if(emailInput) emailInput.addEventListener('input', ()=> refreshDupeState(card));
-    if(nameInput) nameInput.addEventListener('input', ()=> refreshDupeState(card));
+    if(emailInput) emailInput.addEventListener('input', ()=> refreshDupeState(card, buildNameMap(), buildEmailMap()));
+    if(nameInput) nameInput.addEventListener('input', ()=> refreshDupeState(card, buildNameMap(), buildEmailMap()));
   });
   function updateDeleteSelectedState(){
     const checked = wrap.querySelectorAll('.card-select-check:checked').length;
@@ -3725,7 +3749,8 @@ function renderTeamTab(){
       const cards = Array.from(wrap.querySelectorAll('.member-card'));
       if(cards.length===0) return;
       let hasError = false;
-      cards.forEach(card=>{ if(checkEmailDupe(card)) hasError = true; });
+      const saveEmailMap = buildEmailMap();
+      cards.forEach(card=>{ if(checkEmailDupe(card, saveEmailMap)) hasError = true; });
       if(hasError){ showToast('Fix the email conflicts (see red boxes) before saving'); return; }
       const contactUpdates = [];
       cards.forEach(card=>{
