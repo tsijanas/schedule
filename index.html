@@ -281,6 +281,28 @@
     text-transform:uppercase; letter-spacing:0.03em; border-top:1px solid rgba(0,0,0,0.08); margin-top:2px;
   }
   .bar-menu-empty{ padding:9px 13px; font-size:12px; color:var(--ink-faint); font-style:italic; }
+  .ms-dropdown{ position:relative; }
+  .ms-dropdown-trigger{
+    border:1px solid var(--line); border-radius:10px; padding:9px 12px; font-size:13px;
+    background:#fff; display:flex; align-items:center; justify-content:space-between; gap:8px;
+    cursor:pointer; color:var(--ink);
+  }
+  .ms-dropdown-trigger:hover{ border-color:var(--ink-faint); }
+  .ms-dropdown-trigger .ms-summary{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ms-dropdown-trigger .ms-arrow{ flex-shrink:0; opacity:0.6; font-size:11px; transition:transform 0.12s; }
+  .ms-dropdown.open .ms-dropdown-trigger .ms-arrow{ transform:rotate(180deg); }
+  .ms-dropdown-menu{
+    display:none; position:absolute; top:calc(100% + 4px); left:0; right:0; z-index:22;
+    background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow);
+    padding:6px; max-height:220px; overflow-y:auto;
+  }
+  .ms-dropdown.open .ms-dropdown-menu{ display:block; }
+  .ms-dropdown-menu label{
+    display:flex; align-items:center; gap:8px; padding:7px 9px; font-size:12.5px;
+    border-radius:7px; cursor:pointer;
+  }
+  .ms-dropdown-menu label:hover{ background:var(--paper); }
+  .ms-dropdown-menu .ms-empty{ padding:7px 9px; font-size:12px; color:var(--ink-faint); font-style:italic; }
   .add-select{ margin-top:4px; opacity:0.45; transition:opacity 0.15s ease; display:flex; justify-content:center; }
   .btn-remove-x{
     width:26px; height:26px; border-radius:50%; border:1px solid var(--brick);
@@ -4509,6 +4531,50 @@ function renderTaskPoolCard(){
     });
   });
 }
+// Builds one multi-select checkbox dropdown — closed by default, showing a short summary of
+// what's selected, opening downward into a checkbox list on click. fieldClass identifies which
+// field this is for (e.g. "exclude-select"/"combine-select") so readTaskCard can find it later;
+// options is [{id, name}], selectedIds is the array of currently-checked option ids.
+function multiSelectDropdownHtml(fieldClass, options, selectedIds){
+  const selected = new Set(selectedIds||[]);
+  const selectedNames = options.filter(o=>selected.has(o.id)).map(o=>o.name);
+  const summary = selectedNames.length===0 ? '— none —'
+    : selectedNames.length===1 ? selectedNames[0]
+    : `${selectedNames.length} selected`;
+  const optionsHtml = options.length===0
+    ? `<div class="ms-empty">No other tasks yet.</div>`
+    : options.map(o=>`<label><input type="checkbox" value="${o.id}" ${selected.has(o.id)?'checked':''}> ${escHtml(o.name)}</label>`).join('');
+  return `<div class="ms-dropdown ${fieldClass}">
+    <div class="ms-dropdown-trigger"><span class="ms-summary">${escHtml(summary)}</span><span class="ms-arrow">▾</span></div>
+    <div class="ms-dropdown-menu">${optionsHtml}</div>
+  </div>`;
+}
+function wireMsDropdowns(wrap){
+  wrap.querySelectorAll('.ms-dropdown').forEach(dd=>{
+    const trigger = dd.querySelector('.ms-dropdown-trigger');
+    const summaryEl = dd.querySelector('.ms-summary');
+    trigger.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const wasOpen = dd.classList.contains('open');
+      document.querySelectorAll('.ms-dropdown.open').forEach(o=> o.classList.remove('open'));
+      if(!wasOpen) dd.classList.add('open');
+    });
+    dd.querySelectorAll('.ms-dropdown-menu input[type="checkbox"]').forEach(cb=>{
+      cb.addEventListener('change', ()=>{
+        const checked = Array.from(dd.querySelectorAll('.ms-dropdown-menu input:checked'));
+        const names = checked.map(c=> c.closest('label').textContent.trim());
+        summaryEl.textContent = names.length===0 ? '— none —' : names.length===1 ? names[0] : `${names.length} selected`;
+      });
+    });
+  });
+  if(!document.body.dataset.msDropdownGlobalWired){
+    document.body.dataset.msDropdownGlobalWired = '1';
+    document.addEventListener('click', (e)=>{
+      if(e.target.closest('.ms-dropdown-menu')) return;
+      document.querySelectorAll('.ms-dropdown.open').forEach(o=> o.classList.remove('open'));
+    });
+  }
+}
 function renderTasksTab(){
   renderTaskPoolCard();
   const wrap = document.getElementById('tasks-list');
@@ -4542,19 +4608,22 @@ function renderTasksTab(){
         </div>
         <div class="field">
           <label>Cannot combine with</label>
-          <select class="exclude-select">
-            <option value="">— none —</option>
-            ${state.tasks.filter(o=>o.id!==t.id).map(o=>`<option value="${o.id}" ${t.excludes===o.id?'selected':''}>${escHtml(o.name)}</option>`).join('')}
-          </select>
+          ${(()=>{
+            const excludesArr = Array.isArray(t.excludes) ? t.excludes : (t.excludes ? [t.excludes] : []);
+            const otherTasks = state.tasks.filter(o=>o.id!==t.id).map(o=>({id:o.id, name:o.name}));
+            return multiSelectDropdownHtml('exclude-select', otherTasks, excludesArr);
+          })()}
         </div>
         <div class="field">
           <label>Combine with</label>
-          <select class="combine-select">
-            <option value="">— none —</option>
-            <option value="__rotational__" ${t.combineWith==='__rotational__'?'selected':''}>Rotational balance (any eligible task, picked fairly)</option>
-            ${state.tasks.filter(o=>o.id!==t.id).map(o=>`<option value="${o.id}" ${t.combineWith===o.id?'selected':''}>${escHtml(o.name)}</option>`).join('')}
-          </select>
-          <div class="muted" style="font-size:10.5px; margin-top:4px;">Whoever's picked for this also gets a second task that day — named specifically, or fairest pick with Rotational balance. Respects Cannot combine with either way.</div>
+          ${(()=>{
+            const otherTasks = state.tasks.filter(o=>o.id!==t.id).map(o=>({id:o.id, name:o.name}));
+            const combineArr = Array.isArray(t.combineWith) ? t.combineWith
+              : t.combineWith==='__rotational__' ? otherTasks.map(o=>o.id)
+              : t.combineWith ? [t.combineWith] : [];
+            return multiSelectDropdownHtml('combine-select', otherTasks, combineArr);
+          })()}
+          <div class="muted" style="font-size:10.5px; margin-top:4px;">Assigns 1 additional task from selected options.</div>
         </div>
         <div class="field">
           <label>Scheduling</label>
@@ -4585,8 +4654,8 @@ function renderTasksTab(){
     const name = card.querySelector('.task-name').value.trim() || 'Untitled task';
     const levels = Array.from(card.querySelectorAll('.lvl-check:checked')).map(c=>c.dataset.lvl);
     const visibleToLevels = Array.from(card.querySelectorAll('.visible-lvl-check:checked')).map(c=>c.dataset.lvl);
-    const excludes = card.querySelector('.exclude-select').value || null;
-    const combineWith = card.querySelector('.combine-select').value || null;
+    const excludes = Array.from(card.querySelectorAll('.exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+    const combineWith = Array.from(card.querySelectorAll('.combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const sameAllWeek = card.querySelector('.same-week-check').checked;
     const notes = card.querySelector('.task-notes').value;
     return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, sameAllWeek, notes } };
@@ -4632,6 +4701,7 @@ function renderTasksTab(){
     });
   });
   attachTaskDragHandlers(wrap);
+  wireMsDropdowns(wrap);
 
   const saveAllTasksBtn = document.getElementById('btn-save-all-tasks');
   if(saveAllTasksBtn && !saveAllTasksBtn.dataset.wired){
@@ -6682,10 +6752,10 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
     if(existing.includes(entry.task.id)) return false;
     if(existing.length >= MAX_TASKS_PER_DAY) return false;
     const teamTasks = state.tasksByTeam[entry.team.id] || [];
-    if(entry.task.excludes && existing.includes(entry.task.excludes)) return false;
+    if(excludesOf(entry.task).some(exId=>existing.includes(exId))) return false;
     return !existing.some(tid=>{
       const et = teamTasks.find(t=>t.id===tid);
-      return et && et.excludes === entry.task.id;
+      return et && excludesOf(et).includes(entry.task.id);
     });
   }
   function markAssigned(entry, dISO){
@@ -6789,10 +6859,10 @@ async function generateWeek(weekMon, opts){
     const existing = existingTasks(member.id, d);
     if(existing.includes(task.id)) return false;
     if(existing.length >= MAX_TASKS_PER_DAY) return false;
-    if(task.excludes && existing.includes(task.excludes)) return false;
+    if(excludesOf(task).some(exId=>existing.includes(exId))) return false;
     const conflictsWithExisting = existing.some(tid=>{
       const et = state.tasks.find(t=>t.id===tid);
-      return et && et.excludes === task.id;
+      return et && excludesOf(et).includes(task.id);
     });
     if(conflictsWithExisting) return false;
     return true;
@@ -6967,36 +7037,34 @@ async function generateWeek(weekMon, opts){
   });
 
   // Pass 3 — Combine with: whoever's assigned to a task marked this way also gets a second
-  // task that same day, on top of whatever passes 1 and 2 already gave them. A specific named
-  // task only applies if they're genuinely eligible, free, and it doesn't conflict — no
-  // fallback if it isn't available that day, since forcing a pairing that doesn't fit would be
-  // worse than just leaving it. "Rotational balance" instead picks whichever eligible task is
-  // fairest for them, the same way every other pick in this generator already works.
-  const combineTasks = tasksSorted.filter(t=> t.combineWith);
+  // task that same day, on top of whatever passes 1 and 2 already gave them — picked fairly
+  // among whichever of the selected tasks are actually eligible and free that day, the same
+  // fairness rule as everything else in this generator. No fallback if none of the selected
+  // tasks work out that day, since forcing a pairing that doesn't fit would be worse than just
+  // leaving it. combineWithOf normalizes older single-value/'__rotational__' data.
+  function combineWithOf(task){
+    if(Array.isArray(task.combineWith)) return task.combineWith;
+    if(task.combineWith === '__rotational__') return tasksSorted.filter(t=>t.id!==task.id).map(t=>t.id);
+    return task.combineWith ? [task.combineWith] : [];
+  }
+  const combineTasks = tasksSorted.filter(t=> combineWithOf(t).length>0);
   combineTasks.forEach(task=>{
+    const targetIds = new Set(combineWithOf(task));
     dates.forEach(dISO=>{
       if(isBankHoliday(dISO)) return;
       const assignedIds = (schedule[dISO][task.id]||[]).slice();
       assignedIds.forEach(mid=>{
         const member = teamMembers().find(m=>m.id===mid);
         if(!member) return;
-        let secondTask = null;
-        if(task.combineWith === '__rotational__'){
-          let options = tasksSorted.filter(t=>
-            t.id!==task.id && member.eligibility[t.id] && levelAllowed(t, member.levels) && canAssign(member, t, dISO)
-          );
-          options.sort((a,b)=>{
-            const ca=(bal[mid]&&bal[mid][a.id])||0, cb=(bal[mid]&&bal[mid][b.id])||0;
-            return ca-cb || a.name.localeCompare(b.name);
-          });
-          options = shuffleTiedGroups(options, t=> (bal[mid]&&bal[mid][t.id])||0);
-          secondTask = options[0] || null;
-        } else {
-          const named = tasksSorted.find(t=>t.id===task.combineWith);
-          if(named && member.eligibility[named.id] && levelAllowed(named, member.levels) && canAssign(member, named, dISO)){
-            secondTask = named;
-          }
-        }
+        let options = tasksSorted.filter(t=>
+          targetIds.has(t.id) && t.id!==task.id && member.eligibility[t.id] && levelAllowed(t, member.levels) && canAssign(member, t, dISO)
+        );
+        options.sort((a,b)=>{
+          const ca=(bal[mid]&&bal[mid][a.id])||0, cb=(bal[mid]&&bal[mid][b.id])||0;
+          return ca-cb || a.name.localeCompare(b.name);
+        });
+        options = shuffleTiedGroups(options, t=> (bal[mid]&&bal[mid][t.id])||0);
+        const secondTask = options[0] || null;
         if(secondTask){
           markAssigned(mid, dISO, secondTask.id);
           bump(mid, secondTask.id);
@@ -7368,13 +7436,16 @@ function existingTasksForMemberOnDate(memberId, dateISO, schedule){
 // MAX_TASKS_PER_DAY the way the generator does — that's a fairness default for automatic
 // assignment, not a hard rule. A manual add should still let someone be placed on a third
 // (or more) task the same day if that's genuinely what's needed that day.
+// Normalizes a task's "cannot combine with" setting to an array — handles both the current
+// multi-select format and any older single-value data that hasn't been re-saved yet.
+function excludesOf(task){ return Array.isArray(task.excludes) ? task.excludes : (task.excludes ? [task.excludes] : []); }
 function canAssignNow(member, task, dateISO, schedule){
   const existing = existingTasksForMemberOnDate(member.id, dateISO, schedule);
   if(existing.includes(task.id)) return false;
-  if(task.excludes && existing.includes(task.excludes)) return false;
+  if(excludesOf(task).some(exId=>existing.includes(exId))) return false;
   const conflictsWithExisting = existing.some(tid=>{
     const et = state.tasks.find(t=>t.id===tid);
-    return et && et.excludes === task.id;
+    return et && excludesOf(et).includes(task.id);
   });
   if(conflictsWithExisting) return false;
   return true;
