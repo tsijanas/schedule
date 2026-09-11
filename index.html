@@ -6994,9 +6994,16 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
       const neededHere = !isBankHoliday(dates[i]) && g.perTeam.some(({team,task})=> ((state.reqByTeam[team.id]?.[task.id]||{})[DAYS[i]]||0) > 0);
       let j = i;
       if(neededHere){
+        // Same rule as the team grid: merge only while the same people are on it across every
+        // team in the group. A week broken by OOO cover has to split here too, otherwise the
+        // whole row renders from Monday's names and the cover is invisible.
+        const daySignature = idx => g.perTeam.map(({team,task})=>
+          ((((rowTeamData[team.id]||{}).sched||{})[dates[idx]]||{})[task.id]||[]).slice().sort().join('+')
+        ).join('|');
+        const sig = daySignature(i);
         while(j+1 < dates.length){
           const nextNeeded = !isBankHoliday(dates[j+1]) && g.perTeam.some(({team,task})=> ((state.reqByTeam[team.id]?.[task.id]||{})[DAYS[j+1]]||0) > 0);
-          if(nextNeeded) j++; else break;
+          if(nextNeeded && daySignature(j+1)===sig) j++; else break;
         }
       }
       runs.push({startIdx:i, endIdx:j});
@@ -7900,6 +7907,8 @@ function buildScheduleTableHtml(teamId){
   function runsFor(taskId){
     const task = state.tasks.find(t=>t.id===taskId);
     const allowMerge = !!(task && task.sameAllWeek);
+    const idsOn = i => (((currentSchedule[dates[i]]||{})[taskId]) || []);
+    const samePeople = (a,b) => a.length===b.length && a.every(x=>b.includes(x));
     const runs = [];
     let i = 0;
     while(i < DAYS.length){
@@ -7907,11 +7916,17 @@ function buildScheduleTableHtml(teamId){
       if(allowMerge){
         const neededHere = ((state.req[taskId]||{})[DAYS[i]] || 0) > 0;
         if(neededHere){
-          while(j+1 < DAYS.length && ((state.req[taskId]||{})[DAYS[j+1]] || 0) > 0) j++;
+          // Merge only while the same people are actually on it. "Same all week" is how the
+          // week is normally built, not a promise it can never be broken — when someone is
+          // marked off mid-week and covered by someone else, the bar has to split so the
+          // change is visible and each stretch stays separately editable. Without this the
+          // whole row rendered from Monday's names and silently hid the cover.
+          while(j+1 < DAYS.length
+                && ((state.req[taskId]||{})[DAYS[j+1]] || 0) > 0
+                && samePeople(idsOn(j+1), idsOn(i))) j++;
         }
       }
-      const ids = ((currentSchedule[dates[i]]||{})[taskId]) || [];
-      runs.push({startIdx:i, endIdx:j, ids, dates:dates.slice(i,j+1)});
+      runs.push({startIdx:i, endIdx:j, ids:idsOn(i), dates:dates.slice(i,j+1)});
       i = j+1;
     }
     return runs;
@@ -8246,7 +8261,38 @@ async function findCrossTeamCoverage(originTeamId, taskName, dISO, excludeMember
   candidates.sort((a,b)=> a.v-b.v || a.member.name.localeCompare(b.member.name));
   return candidates[0];
 }
+// Which "same all week" tasks in this week actually have the outgoing person on them.
+function sameAllWeekTaskIdsAffected(sched, dateISOs, memberId){
+  const ids = new Set();
+  dateISOs.forEach(dISO=>{
+    const day = sched[dISO] || {};
+    Object.keys(day).forEach(taskId=>{
+      if(!(day[taskId]||[]).includes(memberId)) return;
+      const t = state.tasks.find(x=>x.id===taskId);
+      if(t && t.sameAllWeek) ids.add(taskId);
+    });
+  });
+  return [...ids];
+}
+// The days within this absence where that person actually holds that task.
+function datesOnTask(sched, dateISOs, taskId, memberId){
+  return dateISOs.filter(dISO=> ((sched[dISO]||{})[taskId]||[]).includes(memberId));
+}
 async function autoReplaceForOOO(memberId, dateISOs){
+  // Everything below reads the *current* team's roster and schedule. Marking someone off from
+  // the department-wide Holidays sheet means they often aren't on the team being viewed, and
+  // this then scanned the wrong team's week, found nothing, and silently did nothing at all.
+  const person = state.members.find(m=>m.id===memberId);
+  const personTeamId = person && person.teamId;
+  if(!personTeamId) return;
+  if(personTeamId !== currentTeamId){
+    const firstDate = dateISOs.slice().sort()[0];
+    return await withBorrowedTeamContext(personTeamId, mondayOf(new Date(firstDate+'T00:00:00')),
+      ()=> autoReplaceForOOOInTeam(memberId, dateISOs));
+  }
+  return await autoReplaceForOOOInTeam(memberId, dateISOs);
+}
+async function autoReplaceForOOOInTeam(memberId, dateISOs){
   const byWeek = {};
   dateISOs.forEach(dISO=>{
     const wISO = iso(mondayOf(new Date(dISO+'T00:00:00')));
@@ -8267,14 +8313,31 @@ async function autoReplaceForOOO(memberId, dateISOs){
   for(const wISO of Object.keys(byWeek)){
     const sched = await loadWeek(wISO);
     let changed = false;
+    // A "same all week" task used to be skipped outright, so marking its holder off changed
+    // nothing. It's now covered like any other — but rather than picking a different person
+    // per day, one replacement is chosen who can cover every affected day at once, so the
+    // week stays as close to "same all week" as the absence allows. Only the days they're
+    // actually off change; the rest of the week keeps its original person.
+    const sameWeekPick = {};
+    for(const taskId of sameAllWeekTaskIdsAffected(sched, byWeek[wISO], memberId)){
+      sameWeekPick[taskId] = await nextInLineAcrossDates(
+        taskId, datesOnTask(sched, byWeek[wISO], taskId, memberId), new Set([memberId]), sched);
+    }
     for(const dISO of byWeek[wISO]){
       const day = sched[dISO];
       if(!day) continue;
       for(const taskId of Object.keys(day)){
         if(!(day[taskId]||[]).includes(memberId)) continue;
         const task = state.tasks.find(t=>t.id===taskId);
-        if(!task || task.sameAllWeek) continue; // same-all-week needs a manager's judgment call — see note above
-        const replacement = await nextInLineSingleDate(taskId, dISO, new Set([memberId]), sched);
+        if(!task) continue;
+        // Prefer the one person picked to cover this whole absence; fall back to the normal
+        // per-day pick if nobody could cover every day, or if they're already on it today.
+        let replacement = null;
+        if(task.sameAllWeek && sameWeekPick[taskId]
+           && !(day[taskId]||[]).includes(sameWeekPick[taskId].id)){
+          replacement = sameWeekPick[taskId];
+        }
+        if(!replacement) replacement = await nextInLineSingleDate(taskId, dISO, new Set([memberId]), sched);
         day[taskId] = day[taskId].filter(x=>x!==memberId);
         if(replacement){
           day[taskId].push(replacement.id);
