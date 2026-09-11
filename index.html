@@ -8236,30 +8236,54 @@ async function nextInLineAcrossDates(taskId, dateISOs, excludeIds, schedule){
 // department, check whether any of those sibling teams has someone eligible and free — and if
 // several do, picks whoever's most under-scheduled for it, same fairness rule as everywhere
 // else. Returns {team, task, member} or null. Read-only — the caller decides whether to act on it.
-async function findCrossTeamCoverage(originTeamId, taskName, dISO, excludeMemberId){
+// Everyone in the department who could take this task on these day(s), ranked as ONE pool by
+// how much they have already done it — regardless of which team they sit under.
+//
+// With Grand views on, a department is meant to behave as one team that happens to be divided
+// into reporting groups, so cover should go to whoever is genuinely next in line across the
+// whole department, not to the origin team's next-in-line with other teams as an afterthought.
+// With Grand views off the teams really are independent, and only the origin team is asked.
+async function departmentCoverageCandidates(originTeamId, taskName, dateISOs, excludeMemberId, opts){
+  const o = Object.assign({ includeOrigin:true, siblingsOnly:false }, opts||{});
   const originTeam = state.teams.find(t=>t.id===originTeamId);
-  if(!originTeam || !originTeam.departmentId) return null;
-  const siblingTeams = teamsInDepartment(originTeam.departmentId).filter(t=>t.id!==originTeamId);
-  if(siblingTeams.length===0) return null;
-  const wMonday = mondayOf(new Date(dISO+'T00:00:00'));
+  const pool = (originTeam && originTeam.departmentId)
+    ? teamsInDepartment(originTeam.departmentId)
+    : [originTeam].filter(Boolean);
+  const teams = pool.filter(t=> o.siblingsOnly ? t.id!==originTeamId : (o.includeOrigin || t.id!==originTeamId));
+  if(teams.length===0) return [];
+  const wMonday = mondayOf(new Date(dateISOs[0]+'T00:00:00'));
+  const wanted = (taskName||'').trim().toLowerCase();
   const candidates = [];
-  for(const team of siblingTeams){
-    const matchingTask = (state.tasksByTeam[team.id]||[]).find(t=> (t.name||'').trim().toLowerCase() === taskName.trim().toLowerCase());
+  for(const team of teams){
+    const matchingTask = (state.tasksByTeam[team.id]||[]).find(t=> (t.name||'').trim().toLowerCase() === wanted);
     if(!matchingTask) continue;
     const teamBalance = await computeBalanceForTeam(team.id);
-    const opts = await readWithBorrowedTeamContext(team.id, wMonday, async ()=>{
-      const already = ((currentSchedule[dISO]||{})[matchingTask.id]) || [];
-      return eligibleMembersForRun(matchingTask.id, [dISO], already);
+    const free = await readWithBorrowedTeamContext(team.id, wMonday, async ()=>{
+      // Must be able to cover EVERY day asked for, so a multi-day absence gets one person
+      // rather than a patchwork.
+      const already = dateISOs.flatMap(d=> ((currentSchedule[d]||{})[matchingTask.id]) || []);
+      return eligibleMembersForRun(matchingTask.id, dateISOs, already);
     });
-    opts.forEach(m=>{
+    free.forEach(m=>{
       if(m.id===excludeMemberId) return;
       const v = (teamBalance[m.id]&&teamBalance[m.id][matchingTask.id]) || 0;
       candidates.push({ team, task:matchingTask, member:m, v });
     });
   }
-  if(candidates.length===0) return null;
-  candidates.sort((a,b)=> a.v-b.v || a.member.name.localeCompare(b.member.name));
-  return candidates[0];
+  candidates.sort((a,b)=> a.v-b.v || memberName(a.member.id).localeCompare(memberName(b.member.id)));
+  return candidates;
+}
+// Kept for the Grand-views-off case: only sibling teams, and only as a last resort.
+async function findCrossTeamCoverage(originTeamId, taskName, dISO, excludeMemberId){
+  const list = await departmentCoverageCandidates(originTeamId, taskName, [dISO], excludeMemberId, { siblingsOnly:true });
+  return list[0] || null;
+}
+// Is this team's department set up to behave as one big team?
+function departmentActsAsOneTeam(teamId){
+  const team = state.teams.find(t=>t.id===teamId);
+  if(!team || !team.departmentId) return false;
+  const dept = state.departments.find(d=>d.id===team.departmentId);
+  return !!(dept && dept.showGrandViews!==false);
 }
 // Which "same all week" tasks in this week actually have the outgoing person on them.
 function sameAllWeekTaskIdsAffected(sched, dateISOs, memberId){
@@ -8318,10 +8342,18 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
     // per day, one replacement is chosen who can cover every affected day at once, so the
     // week stays as close to "same all week" as the absence allows. Only the days they're
     // actually off change; the rest of the week keeps its original person.
+    const oneTeam = departmentActsAsOneTeam(originTeamId);
     const sameWeekPick = {};
     for(const taskId of sameAllWeekTaskIdsAffected(sched, byWeek[wISO], memberId)){
-      sameWeekPick[taskId] = await nextInLineAcrossDates(
-        taskId, datesOnTask(sched, byWeek[wISO], taskId, memberId), new Set([memberId]), sched);
+      const runDates = datesOnTask(sched, byWeek[wISO], taskId, memberId);
+      if(oneTeam){
+        const task = state.tasks.find(t=>t.id===taskId);
+        const best = (await departmentCoverageCandidates(originTeamId, task ? task.name : '', runDates, memberId))[0];
+        sameWeekPick[taskId] = best || null;   // {team, task, member} — may be another team
+      } else {
+        const m = await nextInLineAcrossDates(taskId, runDates, new Set([memberId]), sched);
+        sameWeekPick[taskId] = m ? { team: originTeam, task: state.tasks.find(t=>t.id===taskId), member: m } : null;
+      }
     }
     for(const dISO of byWeek[wISO]){
       const day = sched[dISO];
@@ -8330,20 +8362,43 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
         if(!(day[taskId]||[]).includes(memberId)) continue;
         const task = state.tasks.find(t=>t.id===taskId);
         if(!task) continue;
-        // Prefer the one person picked to cover this whole absence; fall back to the normal
-        // per-day pick if nobody could cover every day, or if they're already on it today.
-        let replacement = null;
+        // Who covers: the person picked for this whole absence if there is one, otherwise
+        // whoever is next in line for this single day. When the department acts as one team
+        // that pick is ranked across every team in it, so `pick.team` may not be this one.
+        let pick = null;
         if(task.sameAllWeek && sameWeekPick[taskId]
-           && !(day[taskId]||[]).includes(sameWeekPick[taskId].id)){
-          replacement = sameWeekPick[taskId];
+           && !(day[taskId]||[]).includes(sameWeekPick[taskId].member.id)){
+          pick = sameWeekPick[taskId];
         }
-        if(!replacement) replacement = await nextInLineSingleDate(taskId, dISO, new Set([memberId]), sched);
+        if(!pick && oneTeam){
+          pick = (await departmentCoverageCandidates(originTeamId, task.name, [dISO], memberId))[0] || null;
+        }
+        if(!pick){
+          const m = await nextInLineSingleDate(taskId, dISO, new Set([memberId]), sched);
+          if(m) pick = { team: originTeam, task, member: m };
+        }
+        // Someone from another team covers on their own team's schedule, not this one — that's
+        // the existing cross-team path below, so only an origin-team pick is placed here.
+        const replacement = (pick && pick.team && pick.team.id===originTeamId) ? pick.member : null;
         day[taskId] = day[taskId].filter(x=>x!==memberId);
         if(replacement){
           day[taskId].push(replacement.id);
           replaced++;
-          replacedNames.add(replacement.name);
+          replacedNames.add(memberName(replacement.id));
           addInstant(replacement.id, taskId, dISO, originTeamId);
+        } else if(pick && pick.team){
+          const crossWeekISO = iso(mondayOf(new Date(dISO+'T00:00:00')));
+          await withBorrowedTeamContext(pick.team.id, mondayOf(new Date(dISO+'T00:00:00')), async ()=>{
+            currentSchedule[dISO] = currentSchedule[dISO] || {};
+            currentSchedule[dISO][pick.task.id] = currentSchedule[dISO][pick.task.id] || [];
+            if(!currentSchedule[dISO][pick.task.id].includes(pick.member.id)) currentSchedule[dISO][pick.task.id].push(pick.member.id);
+            await saveWeek(iso(currentWeekMonday), currentSchedule, { skipDirtyTracking:true });
+            await safeSet('notified_snapshot_'+pick.team.id+'_'+crossWeekISO, currentSchedule, true);
+          });
+          crossTeam++;
+          crossTeamNotes.push(`${memberName(pick.member.id)} (${pick.team.name})`);
+          addInstant(pick.member.id, pick.task.id, dISO, pick.team.id);
+          logAudit('schedule.cross_team_cover', { task: task.name, date: dISO, coveredBy: memberName(pick.member.id), fromTeam: pick.team.name, originTeam: originTeam?.name });
         } else {
           // Nobody on this team can cover it — before leaving it open, check whether a
           // sibling team in the same department (sharing this task by name) has someone
