@@ -514,6 +514,14 @@
   .fsel-opt.active{ background:rgba(0,0,0,0.09); }
   .fsel-opt:disabled{ opacity:0.45; cursor:default; }
   .team-row{ display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  /* A Requirement row driven by the department's Grand Requirement — readable, clearly not
+     yours to edit, and not so faded that the numbers stop being legible. */
+  .req-table tr.req-row-locked td{ background:var(--gold-soft); }
+  .req-table tr.req-row-locked .stepper{ opacity:0.78; }
+  .req-override-label{
+    display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500;
+    color:var(--ink-soft); white-space:nowrap;
+  }
   /* Team rows on Department -> Teams. The name is the field that should absorb spare width,
      but .fsel (the enhanced-select wrapper) defaults to width:100%, which otherwise collapses
      the name box to a few pixels and leaves the row looking like it has no name field at all. */
@@ -655,6 +663,7 @@
       <button class="nav-item admin-only" data-tab="grand-tasks" id="nav-grand-tasks">Tasks</button>
       <button class="nav-item admin-only" data-tab="grand-req" id="nav-grand-req">Requirement</button>
       <button class="nav-item admin-only" data-tab="grand" id="nav-grand">Schedule</button>
+      <button class="nav-item admin-only" data-tab="grand-holidays" id="nav-grand-holidays">Holidays</button>
       <button type="button" class="admin-only nav-submenu-toggle" id="toggle-dept-insights" aria-expanded="false">
         Insights<span class="nav-submenu-arrow">▾</span>
       </button>
@@ -894,9 +903,13 @@
         <p id="grand-req-dept-name">Combined view across every team in this department.</p>
       </div>
       <div class="card" style="overflow-x:auto;">
-        <div class="hint">Set one department-wide total per task, per day — it splits across your teams automatically, proportional to each team's headcount. Matches tasks by name across teams, since each team's tasks aren't formally linked yet. Nothing changes on any team's own Requirement until you click Apply.</div>
+        <div class="hint">Set one department-wide total per task, per day — it splits across your teams automatically, proportional to each team's headcount, and saves down to them as you type. Matches tasks by name across teams, since each team's tasks aren't formally linked yet. A team that has ticked <strong>Override</strong> for a task on its own Requirement tab keeps its own numbers for it and is left out of the split.</div>
         <div id="grand-req-wrap"></div>
-        <div class="row" style="margin-top:14px;"><div class="spacer"></div><button class="btn small" id="btn-apply-grand-req">Apply to teams</button></div>
+        <div class="row" style="margin-top:14px;">
+          <span class="muted" id="grand-req-push-status" style="font-size:11.5px;"></span>
+          <div class="spacer"></div>
+          <button class="btn secondary small" id="btn-apply-grand-req" title="Push these numbers to every following team again">Re-apply to teams</button>
+        </div>
       </div>
     </div>
 
@@ -969,6 +982,45 @@
       </div>
     </div>
 
+    <!-- DEPARTMENT-WIDE HOLIDAYS TAB -->
+    <div class="tab-panel" id="tab-grand-holidays">
+      <div class="page-head">
+        <h1>Holidays <span class="muted" style="font-weight:400; font-size:14px;" id="ghol-dept-name"></span></h1>
+        <p>Every team in this department on one sheet. Click one or more days, then choose who's off and why — anyone in the department can be picked, including people who haven't signed in yet.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="week-nav">
+            <button id="ghol-prev">‹</button>
+            <div class="wk-label" id="ghol-label"></div>
+            <button id="ghol-next">›</button>
+          </div>
+          <div class="spacer"></div>
+          <span class="muted" id="ghol-selection-text">Click a day to select it — you can pick more than one.</span>
+        </div>
+        <div class="row hol-assign-row" id="ghol-assign-row" style="display:none;">
+          <select id="ghol-assign-who" style="max-width:230px;"></select>
+          <select id="ghol-assign-reason" style="max-width:130px;">
+            <option value="holiday">Holiday</option>
+            <option value="sick">Out of office</option>
+          </select>
+          <button class="btn small" id="btn-ghol-mark">Mark off</button>
+          <button class="btn secondary small" id="btn-ghol-clear">Clear selection</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="cal-legend">
+          <span class="cal-legend-item"><span class="cal-legend-swatch"></span> Holiday</span>
+          <span class="cal-legend-item"><span class="cal-legend-swatch sick"></span> Out of office</span>
+        </div>
+        <div class="cal" id="ghol-grid"></div>
+      </div>
+      <div class="card">
+        <h3>Off this week — whole department</h3>
+        <div id="ghol-off-this-week" class="muted"></div>
+      </div>
+    </div>
+
     <!-- MY SCHEDULE (viewer) -->
     <!-- NOTIFICATIONS TAB -->
     <div class="tab-panel viewer-only" id="tab-notifications">
@@ -1035,7 +1087,7 @@
     <!-- MY HOLIDAYS (viewer) -->
     <div class="tab-panel viewer-only" id="tab-myholidays">
       <div class="page-head">
-        <h1>My holidays</h1>
+        <h1>My holidays <span class="muted" style="font-weight:400; font-size:14px;" id="v-cal-scope"></span></h1>
         <p>Everyone's time off, colour-coded. Click an open day to mark yourself off; click your own day again to remove it — you can't edit anyone else's.</p>
       </div>
       <div class="card">
@@ -3230,6 +3282,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='balance') renderBalanceTab();
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
+    if(btn.dataset.tab==='grand-holidays') renderGrandHolidaysTab();
     if(btn.dataset.tab==='data'){ renderAuditLog(); }
     if(btn.dataset.tab==='departments'){ renderDeptSetupCard(); }
     if(btn.dataset.tab==='dept-teams'){ renderDeptTeamsCard(); }
@@ -4464,7 +4517,7 @@ function renderTeamSwitcher(){
     // Grand turned on. "Teams" must not: it's the screen where a team gets put into a
     // department in the first place, so hiding the whole section — as this used to — locked an
     // admin out of the only place that could fix a team having no department.
-    ['nav-grand-tasks','nav-grand-req','nav-grand','toggle-dept-insights'].forEach(id=>{
+    ['nav-grand-tasks','nav-grand-req','nav-grand','nav-grand-holidays','toggle-dept-insights'].forEach(id=>{
       const el = document.getElementById(id);
       if(el) el.style.display = showGrand ? '' : 'none';
     });
@@ -5258,29 +5311,67 @@ function heatBg(value, max){
   const pct = Math.min(85, Math.round((value/Math.max(1,max))*70)+15);
   return `background:color-mix(in srgb, var(--brick) ${pct}%, white); border:1.5px solid transparent;`;
 }
+// Which of this team's tasks are driven by the department's Grand Requirement. Mirrors how the
+// Tasks tab treats Grand Tasks: the grand numbers are the source of truth and get pushed down,
+// and a team's own row stays read-only until someone ticks "Override" on it. Unlike Tasks, the
+// default here is to FOLLOW grand rather than to stay independent — a grand requirement only
+// exists once someone has set one up, and the whole point of setting one is that teams use it.
+function grandReqLockInfo(){
+  const myTeam = state.teams.find(t=>t.id===currentTeamId);
+  const myDept = myTeam && myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
+  const grandOn = !!(myDept && myDept.showGrandViews!==false);
+  const groups = grandOn ? grandTaskGroups(myDept.id) : {};
+  return {
+    grandOn,
+    deptName: myDept ? myDept.name : '',
+    // A task follows grand when the department has Grand views on, the task appears in the
+    // grand requirement table at all, and this team hasn't opted out of it.
+    lockedFor(task){
+      if(!grandOn) return false;
+      const key = (task.name||'').trim().toLowerCase();
+      if(!groups[key]) return false;
+      return task.reqOverride !== true;
+    },
+    inGrand(task){
+      if(!grandOn) return false;
+      return !!groups[(task.name||'').trim().toLowerCase()];
+    },
+  };
+}
 function renderReqTab(){
   const wrap = document.getElementById('req-table-wrap');
   const teamSize = teamMembers().length;
   const sortedTasks = sortedTasksForDisplay(state.tasks);
-  let html = '<table class="req-table"><thead><tr><th style="text-align:left;">Task</th>';
+  const gLock = grandReqLockInfo();
+  const anyLocked = sortedTasks.some(t=> gLock.lockedFor(t));
+  let html = '';
+  if(anyLocked){
+    html += `<div class="muted" style="font-size:11.5px; background:var(--gold-soft); border-radius:8px; padding:8px 11px; margin-bottom:12px;">🔒 Rows marked with a lock follow the Grand Requirement for ${escHtml(gLock.deptName)} — the department-wide numbers are split across its teams automatically. Tick <strong>Override</strong> on a row to set this team's own numbers for it instead.</div>`;
+  }
+  html += '<table class="req-table"><thead><tr><th style="text-align:left;">Task</th>';
   DAYS.forEach(d=> html+=`<th>${DAY_LABELS[d]}</th>`);
   html += '</tr></thead><tbody>';
   sortedTasks.forEach(t=>{
     const row = state.req[t.id] || {mon:0,tue:0,wed:0,thu:0,fri:0,sat:0,sun:0};
     const breakdown = state.reqLevels[t.id];
     const hasBreakdown = breakdown && Object.values(breakdown).some(dayLv=> dayLv && Object.values(dayLv).some(v=>v>0));
-    html += `<tr data-task="${t.id}"><td style="font-weight:600; text-align:left;">
-      <div style="display:flex; align-items:center; gap:6px;">
+    const inGrand = gLock.inGrand(t);
+    const grandLocked = gLock.lockedFor(t);
+    const frozen = hasBreakdown || grandLocked;
+    html += `<tr data-task="${t.id}" class="${grandLocked?'req-row-locked':''}"><td style="font-weight:600; text-align:left;">
+      <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        ${grandLocked?'<span title="Set from the Grand Requirement">🔒</span>':''}
         <span>${escHtml(t.name)}</span>
-        <button type="button" class="req-breakdown-toggle" data-task="${t.id}" title="${hasBreakdown?'Edit level breakdown':'Break this down by level'}">${hasBreakdown?'⚙':'+'}</button>
+        <button type="button" class="req-breakdown-toggle" data-task="${t.id}" ${grandLocked?'disabled title="Set from the Grand Requirement — tick Override to edit"':`title="${hasBreakdown?'Edit level breakdown':'Break this down by level'}"`}>${hasBreakdown?'⚙':'+'}</button>
+        ${inGrand?`<label class="req-override-label"><input type="checkbox" class="req-override-check" data-task="${t.id}" ${t.reqOverride===true?'checked':''}> Override</label>`:''}
       </div>
     </td>`;
     DAYS.forEach(d=>{
       const v = row[d]||0;
       html += `<td><div class="stepper" style="${heatBg(v, teamSize)}">
-        <button type="button" class="stepper-btn" data-dir="-1" ${hasBreakdown?'disabled':''}>−</button>
-        <input type="number" min="0" class="req-input stepper-val" data-day="${d}" value="${v}" ${hasBreakdown?'readonly title="Set via the level breakdown below"':''}>
-        <button type="button" class="stepper-btn" data-dir="1" ${hasBreakdown?'disabled':''}>+</button>
+        <button type="button" class="stepper-btn" data-dir="-1" ${frozen?'disabled':''}>−</button>
+        <input type="number" min="0" class="req-input stepper-val" data-day="${d}" value="${v}" ${frozen?`readonly title="${grandLocked?'Set from the Grand Requirement':'Set via the level breakdown below'}"`:''}>
+        <button type="button" class="stepper-btn" data-dir="1" ${frozen?'disabled':''}>+</button>
       </div></td>`;
     });
     html += `</tr>`;
@@ -5326,6 +5417,19 @@ function renderReqTab(){
   }
   wrap.querySelectorAll('.req-input').forEach(inp=>{
     inp.addEventListener('input', ()=>{ if(!inp.readOnly) refreshCell(inp); });
+  });
+  wrap.querySelectorAll('.req-override-check').forEach(cb=>{
+    cb.addEventListener('change', async ()=>{
+      const task = state.tasks.find(t=>t.id===cb.dataset.task);
+      if(!task) return;
+      task.reqOverride = cb.checked;
+      const ok = await safeSet('tasks_'+currentTeamId, state.tasks, true);
+      if(ok) logAudit('requirement.override_toggle', { task: task.name, override: cb.checked });
+      showToast(cb.checked
+        ? `"${task.name}" now uses this team's own numbers`
+        : `"${task.name}" follows the Grand Requirement again`);
+      renderReqTab();
+    });
   });
   wrap.querySelectorAll('.stepper-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -5493,9 +5597,18 @@ function renderGrandReqBreakdownPanel(key, g, panel){
 }
 document.getElementById('btn-save-req').addEventListener('click', async ()=>{
   const wrap = document.getElementById('req-table-wrap');
+  const gLock = grandReqLockInfo();
   const newReq = {};
   wrap.querySelectorAll('tbody tr[data-task]').forEach(tr=>{
     const taskId = tr.dataset.task;
+    const task = state.tasks.find(t=>t.id===taskId);
+    // A row that follows the Grand Requirement keeps whatever grand last pushed. Its inputs are
+    // readonly so they already hold that, but reading them back would still let a stale render
+    // overwrite a newer grand push — taking the stored value is the honest source.
+    if(task && gLock.lockedFor(task)){
+      newReq[taskId] = state.req[taskId] || {mon:0,tue:0,wed:0,thu:0,fri:0,sat:0,sun:0};
+      return;
+    }
     const row = {};
     DAYS.forEach(d=> row[d] = +tr.querySelector(`[data-day="${d}"]`).value || 0);
     newReq[taskId] = row;
@@ -5693,7 +5806,10 @@ async function renderGrandReqTab(){
   refreshSummaryRow();
   wrap.querySelectorAll('tr[data-gkey]').forEach(row=>{
     updateSplitPreview(row);
-    row.querySelectorAll('.grand-req-input').forEach(inp=> inp.addEventListener('input', ()=> updateSplitPreview(row)));
+    row.querySelectorAll('.grand-req-input').forEach(inp=> inp.addEventListener('input', ()=>{
+      updateSplitPreview(row);
+      scheduleGrandRequirementPush(); // grand is the source of truth — teams follow without a button press
+    }));
   });
   wrap.querySelectorAll('.stepper-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -5703,86 +5819,140 @@ async function renderGrandReqTab(){
     });
   });
 }
-document.getElementById('btn-apply-grand-req').addEventListener('click', async ()=>{
+// Push the department's grand requirement down onto its teams' own Weekly Needs.
+//
+// A team's copy of a task follows grand unless that task has "Override" ticked on the team's
+// own Requirement tab. Overridden teams are left completely alone, and — importantly — they're
+// also left out of the split: the grand number is divided across the teams that actually follow
+// it, so those teams together still add up to the department-wide figure while an overridden
+// team keeps whatever it set for itself.
+async function applyGrandRequirementToTeams({ silent = false } = {}){
   const wrap = document.getElementById('grand-req-wrap');
+  if(!wrap || !currentDepartmentId) return 0;
   const rows = Array.from(wrap.querySelectorAll('tr[data-gkey]'));
-  if(rows.length===0 || !currentDepartmentId) return;
+  if(rows.length===0) return 0;
   const groups = grandTaskGroups(currentDepartmentId);
   const teamSizes = {};
   teamsInDepartment(currentDepartmentId).forEach(t=> teamSizes[t.id] = state.members.filter(m=>m.teamId===t.id).length);
 
-  askConfirm(`Apply the grand requirement to every team's own Weekly Needs? This overwrites each matching task's numbers on every affected team — any hand-adjustments made there will be replaced. Tasks with a level breakdown set here push their own per-level minimums instead of a plain total, split by how many of each level each team actually has.`, 'Apply', async ()=>{
-    const touchedTeamIds = new Set();
-    const newTotals = {};
-    rows.forEach(row=>{
-      const key = row.dataset.gkey;
-      const g = groups[key];
-      const breakdown = grandReqLevels[key];
-      const hasBreakdown = breakdown && Object.values(breakdown).some(dl=> dl && Object.values(dl).some(v=>v>0));
-      newTotals[key] = {};
+  const followersOf = g=> g.perTeam.filter(pt=> pt.task.reqOverride !== true);
 
-      if(hasBreakdown){
-        const teamSizesByLevel = {};
-        g.perTeam.forEach(({team})=>{
-          teamSizesByLevel[team.id] = {};
-          LEVELS.forEach(level=>{
-            teamSizesByLevel[team.id][level] = state.members.filter(m=>m.teamId===team.id && (m.levels||[]).includes(level)).length;
-          });
+  const touchedTeamIds = new Set();
+  const newTotals = {};
+  rows.forEach(row=>{
+    const key = row.dataset.gkey;
+    const g = groups[key];
+    if(!g) return;
+    const followers = followersOf(g);
+    const breakdown = grandReqLevels[key];
+    const hasBreakdown = breakdown && Object.values(breakdown).some(dl=> dl && Object.values(dl).some(v=>v>0));
+    newTotals[key] = {};
+
+    if(hasBreakdown){
+      const teamSizesByLevel = {};
+      followers.forEach(({team})=>{
+        teamSizesByLevel[team.id] = {};
+        LEVELS.forEach(level=>{
+          teamSizesByLevel[team.id][level] = state.members.filter(m=>m.teamId===team.id && (m.levels||[]).includes(level)).length;
         });
-        DAYS.forEach(d=>{
-          const dayBreakdown = breakdown[d] || {};
-          const perTeamLevelTotals = {}; // teamId -> level -> value
-          g.perTeam.forEach(({team})=> perTeamLevelTotals[team.id] = {});
-          LEVELS.forEach(level=>{
-            const levelNeed = dayBreakdown[level] || 0;
-            const weights = g.perTeam.map(pt=>({ key:pt.team.id, weight: teamSizesByLevel[pt.team.id][level]||0 }));
-            const split = splitProportional(levelNeed, weights);
-            split.forEach(s=>{ perTeamLevelTotals[s.key][level] = s.value; });
-          });
-          let dayTotal = 0;
-          g.perTeam.forEach(({team, task})=>{
-            state.reqLevelsByTeam[team.id] = state.reqLevelsByTeam[team.id] || {};
-            state.reqLevelsByTeam[team.id][task.id] = state.reqLevelsByTeam[team.id][task.id] || {};
-            state.reqLevelsByTeam[team.id][task.id][d] = perTeamLevelTotals[team.id];
-            const teamDayTotal = LEVELS.reduce((s,l)=> s + (perTeamLevelTotals[team.id][l]||0), 0);
-            state.reqByTeam[team.id] = state.reqByTeam[team.id] || {};
-            state.reqByTeam[team.id][task.id] = state.reqByTeam[team.id][task.id] || {};
-            state.reqByTeam[team.id][task.id][d] = teamDayTotal;
-            dayTotal += teamDayTotal;
-            touchedTeamIds.add(team.id);
-          });
-          newTotals[key][d] = dayTotal;
+      });
+      DAYS.forEach(d=>{
+        const dayBreakdown = breakdown[d] || {};
+        const perTeamLevelTotals = {}; // teamId -> level -> value
+        followers.forEach(({team})=> perTeamLevelTotals[team.id] = {});
+        LEVELS.forEach(level=>{
+          const levelNeed = dayBreakdown[level] || 0;
+          const weights = followers.map(pt=>({ key:pt.team.id, weight: teamSizesByLevel[pt.team.id][level]||0 }));
+          const split = splitProportional(levelNeed, weights);
+          split.forEach(s=>{ perTeamLevelTotals[s.key][level] = s.value; });
         });
-      } else {
-        const weights = g.perTeam.map(pt=>({ key:pt.team.id, weight: teamSizes[pt.team.id]||0 }));
-        DAYS.forEach(d=>{
-          const total = +row.querySelector(`[data-day="${d}"]`).value || 0;
-          newTotals[key][d] = total;
-          const split = splitProportional(total, weights);
-          split.forEach(s=>{
-            const pt = g.perTeam.find(x=>x.team.id===s.key);
-            if(!pt) return;
-            state.reqByTeam[pt.team.id] = state.reqByTeam[pt.team.id] || {};
-            state.reqByTeam[pt.team.id][pt.task.id] = state.reqByTeam[pt.team.id][pt.task.id] || {};
-            state.reqByTeam[pt.team.id][pt.task.id][d] = s.value;
-            touchedTeamIds.add(pt.team.id);
-          });
+        let dayTotal = 0;
+        followers.forEach(({team, task})=>{
+          state.reqLevelsByTeam[team.id] = state.reqLevelsByTeam[team.id] || {};
+          state.reqLevelsByTeam[team.id][task.id] = state.reqLevelsByTeam[team.id][task.id] || {};
+          state.reqLevelsByTeam[team.id][task.id][d] = perTeamLevelTotals[team.id];
+          const teamDayTotal = LEVELS.reduce((s,l)=> s + (perTeamLevelTotals[team.id][l]||0), 0);
+          state.reqByTeam[team.id] = state.reqByTeam[team.id] || {};
+          state.reqByTeam[team.id][task.id] = state.reqByTeam[team.id][task.id] || {};
+          state.reqByTeam[team.id][task.id][d] = teamDayTotal;
+          dayTotal += teamDayTotal;
+          touchedTeamIds.add(team.id);
         });
-      }
+        newTotals[key][d] = dayTotal;
+      });
+    } else {
+      const weights = followers.map(pt=>({ key:pt.team.id, weight: teamSizes[pt.team.id]||0 }));
+      DAYS.forEach(d=>{
+        const total = +row.querySelector(`[data-day="${d}"]`).value || 0;
+        newTotals[key][d] = total;
+        const split = splitProportional(total, weights);
+        split.forEach(s=>{
+          const pt = followers.find(x=>x.team.id===s.key);
+          if(!pt) return;
+          state.reqByTeam[pt.team.id] = state.reqByTeam[pt.team.id] || {};
+          state.reqByTeam[pt.team.id][pt.task.id] = state.reqByTeam[pt.team.id][pt.task.id] || {};
+          state.reqByTeam[pt.team.id][pt.task.id][d] = s.value;
+          touchedTeamIds.add(pt.team.id);
+        });
+      });
+    }
+  });
+  for(const teamId of touchedTeamIds){
+    await safeSet('weekly_req_'+teamId, state.reqByTeam[teamId], true);
+    await safeSet('weekly_req_levels_'+teamId, state.reqLevelsByTeam[teamId] || {}, true);
+  }
+  grandReqTotals = newTotals;
+  await safeSet('grand_req_'+currentDepartmentId, grandReqTotals, true); // what makes the grand numbers stick instead of resetting to 0
+  await safeSet('grand_req_levels_'+currentDepartmentId, grandReqLevels, true);
+  if(touchedTeamIds.has(currentTeamId)){
+    state.req = state.reqByTeam[currentTeamId];
+    state.reqLevels = state.reqLevelsByTeam[currentTeamId] || {};
+  }
+  logAudit('requirement.grand_apply', { department: currentDepartmentId, teams: touchedTeamIds.size, tasks: rows.length, auto: silent });
+  if(!silent) showToast(`Applied to ${touchedTeamIds.size} team${touchedTeamIds.size===1?'':'s'} — numbers saved here too`);
+  return touchedTeamIds.size;
+}
+// Typing in the grand table pushes down on its own, a beat after you stop — that's what makes
+// the grand numbers the source of truth rather than a draft waiting on a button. Debounced so a
+// four-keystroke number is one push, not four.
+let grandReqPushTimer = null;
+function scheduleGrandRequirementPush(){
+  clearTimeout(grandReqPushTimer);
+  const status = document.getElementById('grand-req-push-status');
+  if(status) status.textContent = 'Saving…';
+  grandReqPushTimer = setTimeout(async ()=>{
+    try{
+      const n = await applyGrandRequirementToTeams({ silent:true });
+      if(status) status.textContent = n>0 ? `Saved — pushed to ${n} team${n===1?'':'s'}` : 'Saved';
+      // Keep the team-level tab honest if it's the one behind this department.
+      if(state.teams.some(t=>t.id===currentTeamId)) renderTeamReqTableOnly();
+    }catch(e){
+      console.error('Could not push the grand requirement', e);
+      if(status) status.textContent = "Couldn't save — check the banner above";
+    }
+  }, 700);
+}
+// Redraw just the team Requirement table, without re-entering renderGrandReqTab — otherwise an
+// auto-push would rebuild the grand table underneath the person still typing in it.
+function renderTeamReqTableOnly(){
+  const wrap = document.getElementById('req-table-wrap');
+  if(!wrap || !wrap.querySelector('table')) return;
+  const gLock = grandReqLockInfo();
+  sortedTasksForDisplay(state.tasks).forEach(t=>{
+    if(!gLock.lockedFor(t)) return;
+    const tr = wrap.querySelector(`tr[data-task="${t.id}"]`);
+    if(!tr) return;
+    DAYS.forEach(d=>{
+      const inp = tr.querySelector(`.req-input[data-day="${d}"]`);
+      if(inp) inp.value = (state.req[t.id]||{})[d] || 0;
     });
-    for(const teamId of touchedTeamIds){
-      await safeSet('weekly_req_'+teamId, state.reqByTeam[teamId], true);
-      await safeSet('weekly_req_levels_'+teamId, state.reqLevelsByTeam[teamId] || {}, true);
-    }
-    grandReqTotals = newTotals;
-    await safeSet('grand_req_'+currentDepartmentId, grandReqTotals, true); // the actual fix — this is what makes it stick instead of resetting to 0
-    await safeSet('grand_req_levels_'+currentDepartmentId, grandReqLevels, true);
-    if(touchedTeamIds.has(currentTeamId)){
-      state.req = state.reqByTeam[currentTeamId];
-      state.reqLevels = state.reqLevelsByTeam[currentTeamId] || {};
-    }
-    showToast(`Applied to ${touchedTeamIds.size} team${touchedTeamIds.size===1?'':'s'} — numbers saved here too`);
-    logAudit('requirement.grand_apply', { department: currentDepartmentId, teams: touchedTeamIds.size, tasks: rows.length });
+  });
+}
+document.getElementById('btn-apply-grand-req').addEventListener('click', async ()=>{
+  const wrap = document.getElementById('grand-req-wrap');
+  if(!wrap || wrap.querySelectorAll('tr[data-gkey]').length===0 || !currentDepartmentId) return;
+  askConfirm(`Re-apply the grand requirement to every team's own Weekly Needs? This overwrites each matching task's numbers on every team that follows grand — teams with "Override" ticked for a task keep their own numbers for it. Tasks with a level breakdown set here push their own per-level minimums instead of a plain total, split by how many of each level each team actually has.`, 'Apply', async ()=>{
+    await applyGrandRequirementToTeams({ silent:false });
     renderReqTab();
   });
 });
@@ -7554,7 +7724,33 @@ function renderYourWeekSummary(){
   wrap.innerHTML = buildYourWeekTableHtml(currentSchedule, currentWeekMonday, me);
   attachYourWeekClicks(wrap, '#sched-grid-wrap');
 }
-function memberName(id){ const m=state.members.find(x=>x.id===id); return m?m.name:'?'; }
+// Someone who's been invited but hasn't signed in yet has no name of their own yet, and used
+// to come back as an empty string — which rendered as a blank option in the Holidays picker and
+// a blank bar on the calendar, making them look absent rather than just unconfirmed. Fall back
+// the same way shortDisplayName does, so an admin can book time off for people regardless of
+// whether they've confirmed their account.
+function memberName(id){
+  const m = state.members.find(x=>x.id===id);
+  if(!m) return '?';
+  if(m.name) return m.name;
+  const email = memberContacts[id] && memberContacts[id].email;
+  if(email){ const prefix = email.split('@')[0]; if(prefix) return prefix; }
+  return '(name pending)';
+}
+// True for anyone who hasn't signed in and set their own name yet — callers use it to tag such
+// a person in a picker so it's obvious why the name reads as an email prefix.
+function isUnconfirmedMember(id){
+  const m = state.members.find(x=>x.id===id);
+  return !!(m && !m.name);
+}
+// One <option> per person, with pending people clearly marked but still fully selectable.
+function holidayWhoOptionsHtml(members){
+  return members
+    .slice()
+    .sort((a,b)=> memberName(a.id).localeCompare(memberName(b.id)))
+    .map(m=>`<option value="${m.id}">${escHtml(memberName(m.id))}${isUnconfirmedMember(m.id)?' — not signed in yet':''}</option>`)
+    .join('');
+}
 // Short display name for schedule bars: first name only, unless someone else in the given
 // scope (their team, or the whole department for Grand Schedule/Who's on) shares that same
 // first name — only then does the surname's first initial get appended, so "Titas" stays
@@ -8299,10 +8495,127 @@ function renderBankHolidaysList(){
 const btnSyncBankHolidays = document.getElementById('btn-sync-bank-holidays');
 if(btnSyncBankHolidays) btnSyncBankHolidays.addEventListener('click', syncBankHolidays);
 
+// ---- Shared holiday calendar ----
+// One builder for all three calendars (team Holidays, the department-wide Grand Holidays sheet,
+// and the viewer's own "My holidays"). They differ only in whose time off they show, whether
+// days are selectable, and who may remove a bar — so those are options rather than three
+// near-identical copies of the month-grid code.
+function holidayCalendarHtml(month, memberIds, opts){
+  const o = Object.assign({
+    selected: null,          // Set of ISO dates currently picked, or null for a read-only grid
+    laneGaps: true,          // keep a person in the same lane across the row so a run reads as one bar
+    bankHolidays: true,      // shade national holidays
+    canRemove: ()=>true,     // which bars get an × the viewer can act on
+    barClass: ()=>'',
+    nameSuffix: ()=>'',      // e.g. " — Team Alpha" on the department-wide sheet
+  }, opts||{});
+  let html = '';
+  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=> html+=`<div class="dow">${d}</div>`);
+  const first = new Date(month);
+  const firstDow = (first.getDay()+6)%7; // 0=mon
+  const start = addDays(first, -firstDow);
+  const allDates = []; for(let i=0;i<42;i++) allDates.push(iso(addDays(start,i)));
+
+  for(let row=0; row<6; row++){
+    const rowDates = allDates.slice(row*7, row*7+7);
+    // Everyone off on any day in this calendar row gets a fixed "lane" for the row, so if
+    // they're off several days in a row here, their bar lines up in the same slot each day —
+    // that's what reads as one continuous stretch rather than separate unrelated bars.
+    const laneSet = new Set();
+    rowDates.forEach(dISO=> memberIds.forEach(mid=>{ if((state.holidays[mid]||[]).includes(dISO)) laneSet.add(mid); }));
+    const lanes = Array.from(laneSet).sort((a,b)=> memberName(a).localeCompare(memberName(b)));
+
+    rowDates.forEach((dISO, colIdx)=>{
+      const d = new Date(dISO+'T00:00:00');
+      const otherMonth = d.getMonth()!==month.getMonth();
+      const weekend = d.getDay()===0 || d.getDay()===6;
+      const isSelected = o.selected ? o.selected.has(dISO) : false;
+      let barsHtml = '';
+      lanes.forEach(mid=>{
+        const offToday = (state.holidays[mid]||[]).includes(dISO);
+        if(!offToday){ if(o.laneGaps) barsHtml += `<div class="hol-bar-gap"></div>`; return; }
+        const prevOff = colIdx>0 && (state.holidays[mid]||[]).includes(rowDates[colIdx-1]);
+        const nextOff = colIdx<6 && (state.holidays[mid]||[]).includes(rowDates[colIdx+1]);
+        const color = colorForMember(mid);
+        const radiusL = prevOff ? '0' : '7px';
+        const radiusR = nextOff ? '0' : '7px';
+        const isSick = ((state.holidayReasons[mid]||{})[dISO]) === 'sick';
+        const removable = o.canRemove(mid);
+        barsHtml += `<div class="hol-bar ${o.barClass(mid)}" data-mid="${mid}" data-date="${dISO}"
+          style="background:${color.bg}; color:${color.fg};
+                 border-top-left-radius:${radiusL}; border-bottom-left-radius:${radiusL};
+                 border-top-right-radius:${radiusR}; border-bottom-right-radius:${radiusR};"
+          title="${escAttr(memberName(mid))}${escAttr(o.nameSuffix(mid))}${isSick?' — out of office':''}${removable?' — click × to remove':''}">
+          <span>${isSick?'<span class="sick-badge">+</span> ':''}${escHtml(memberName(mid))}</span>
+          ${removable?'<span class="hol-bar-x">×</span>':''}
+        </div>`;
+      });
+      const bhName = o.bankHolidays ? bankHolidayName(dISO) : '';
+      html += `<div class="day ${otherMonth?'other-month':''} ${weekend?'weekend':''} ${isSelected?'day-selected':''} ${bhName?'bank-holiday':''}" data-date="${dISO}" title="${bhName?escAttr(bhName):''}">
+        <div class="dnum">${d.getDate()}</div>
+        <div class="hol-bars">${barsHtml}</div>
+      </div>`;
+    });
+  }
+  return html;
+}
+// Removing a bar removes the whole contiguous stretch it belongs to, not just the clicked day.
+// Shared by every calendar so "remove" means the same thing wherever you click it.
+async function removeHolidayRun(mid, clickedDate, redraw){
+  const dates = (state.holidays[mid]||[]).slice().sort();
+  let runStart = clickedDate, runEnd = clickedDate;
+  while(dates.includes(iso(addDays(new Date(runStart+'T00:00:00'),-1)))) runStart = iso(addDays(new Date(runStart+'T00:00:00'),-1));
+  while(dates.includes(iso(addDays(new Date(runEnd+'T00:00:00'),1)))) runEnd = iso(addDays(new Date(runEnd+'T00:00:00'),1));
+  const removedDates = (state.holidays[mid]||[]).filter(d=> d>=runStart && d<=runEnd);
+  const reasonSnapshot = JSON.parse(JSON.stringify(state.holidayReasons[mid]||{}));
+  state.holidays[mid] = (state.holidays[mid]||[]).filter(d=> d<runStart || d>runEnd);
+  removedDates.forEach(d=>{ if(state.holidayReasons[mid]) delete state.holidayReasons[mid][d]; });
+  await persistHolidays();
+  redraw();
+  pushUndo(async ()=>{
+    state.holidays[mid] = state.holidays[mid] || [];
+    removedDates.forEach(d=>{ if(!state.holidays[mid].includes(d)) state.holidays[mid].push(d); });
+    state.holidayReasons[mid] = reasonSnapshot;
+    await persistHolidays();
+    redraw();
+    showToast('Restored');
+  });
+  showToast('Removed', undoLast);
+}
+// Mark a set of days off for one person. Shared by the team and department-wide sheets.
+async function markHolidayDays(who, reason, dates, redraw){
+  state.holidays[who] = state.holidays[who] || [];
+  state.holidayReasons[who] = state.holidayReasons[who] || {};
+  dates.forEach(dISO=>{
+    if(!state.holidays[who].includes(dISO)) state.holidays[who].push(dISO);
+    state.holidayReasons[who][dISO] = reason;
+  });
+  await persistHolidays();
+  redraw();
+  showToast(`Marked ${dates.length} day${dates.length>1?'s':''} ${reason==='sick'?'as out of office':'off'} for ${memberName(who)}`);
+  if(reason==='sick') await autoReplaceForOOO(who, dates);
+}
+function offThisWeekHtml(memberIds, showTeam){
+  const wk = mondayOf(new Date());
+  const lines = [];
+  for(let i=0;i<DAYS.length;i++){
+    const dISO = iso(addDays(wk,i));
+    const off = memberIds.filter(mid=> (state.holidays[mid]||[]).includes(dISO));
+    const names = off.map(mid=>{
+      const isSick = ((state.holidayReasons[mid]||{})[dISO]) === 'sick';
+      const teamName = showTeam ? (state.teams.find(t=>t.id===(state.members.find(m=>m.id===mid)||{}).teamId)||{}).name : '';
+      return `${escHtml(memberName(mid))}${teamName?` <span class="muted" style="font-size:11px;">(${escHtml(teamName)})</span>`:''}${isSick?' (out of office)':''}`;
+    });
+    lines.push(`<div style="margin-bottom:4px;"><strong style="color:var(--ink);">${DAY_LABELS[DAYS[i]]}</strong>: ${names.length? names.join(', ') : 'everyone available'}</div>`);
+  }
+  return lines.join('');
+}
+
+// ---- Team Holidays tab ----
 function renderHolidaysTab(){
   renderBankHolidaysList();
   const sel = document.getElementById('hol-assign-who');
-  sel.innerHTML = teamMembers().map(m=>`<option value="${m.id}">${escHtml(m.name)}</option>`).join('');
+  sel.innerHTML = holidayWhoOptionsHtml(teamMembers());
   enhanceSelect(sel);
   enhanceSelect(document.getElementById('hol-assign-reason'));
   enhanceSelect(document.getElementById('v-hol-reason'));
@@ -8321,20 +8634,9 @@ document.getElementById('btn-hol-mark').addEventListener('click', async ()=>{
   const who = document.getElementById('hol-assign-who').value;
   const reason = document.getElementById('hol-assign-reason').value;
   if(!who || selectedHolidayDates.size===0) return;
-  state.holidays[who] = state.holidays[who] || [];
-  state.holidayReasons[who] = state.holidayReasons[who] || {};
-  selectedHolidayDates.forEach(dISO=>{
-    if(!state.holidays[who].includes(dISO)) state.holidays[who].push(dISO);
-    state.holidayReasons[who][dISO] = reason;
-  });
-  const n = selectedHolidayDates.size;
   const markedDates = [...selectedHolidayDates];
   selectedHolidayDates.clear();
-  await persistHolidays();
-  drawCalendar();
-  drawOffThisWeek();
-  showToast(`Marked ${n} day${n>1?'s':''} ${reason==='sick'?'as out of office':'off'} for ${memberName(who)}`);
-  if(reason==='sick') await autoReplaceForOOO(who, markedDates);
+  await markHolidayDays(who, reason, markedDates, ()=>{ drawCalendar(); drawOffThisWeek(); });
 });
 document.getElementById('btn-hol-clear').addEventListener('click', ()=>{
   selectedHolidayDates.clear();
@@ -8344,55 +8646,7 @@ document.getElementById('btn-hol-clear').addEventListener('click', ()=>{
 function drawCalendar(){
   document.getElementById('cal-label').textContent = currentCalMonth.toLocaleDateString('en-US',{month:'long', year:'numeric'});
   const grid = document.getElementById('cal-grid');
-  let html = '';
-  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=> html+=`<div class="dow">${d}</div>`);
-
-  const first = new Date(currentCalMonth);
-  const firstDow = (first.getDay()+6)%7; // 0=mon
-  const start = addDays(first, -firstDow);
-  const allDates = []; for(let i=0;i<42;i++) allDates.push(iso(addDays(start,i)));
-
-  for(let row=0; row<6; row++){
-    const rowDates = allDates.slice(row*7, row*7+7);
-    // Everyone off on any day in this calendar row gets a fixed "lane" for the row, so if
-    // they're off several days in a row here, their bar lines up in the same slot each day —
-    // that's what reads as one continuous stretch rather than separate unrelated bars.
-    const laneSet = new Set();
-    rowDates.forEach(dISO=> teamMembers().forEach(m=>{ if((state.holidays[m.id]||[]).includes(dISO)) laneSet.add(m.id); }));
-    const lanes = Array.from(laneSet).sort((a,b)=> memberName(a).localeCompare(memberName(b)));
-
-    rowDates.forEach((dISO, colIdx)=>{
-      const d = new Date(dISO+'T00:00:00');
-      const otherMonth = d.getMonth()!==currentCalMonth.getMonth();
-      const weekend = d.getDay()===0 || d.getDay()===6;
-      const isSelected = selectedHolidayDates.has(dISO);
-      let barsHtml = '';
-      lanes.forEach(mid=>{
-        const offToday = (state.holidays[mid]||[]).includes(dISO);
-        if(!offToday){ barsHtml += `<div class="hol-bar-gap"></div>`; return; }
-        const prevOff = colIdx>0 && (state.holidays[mid]||[]).includes(rowDates[colIdx-1]);
-        const nextOff = colIdx<6 && (state.holidays[mid]||[]).includes(rowDates[colIdx+1]);
-        const color = colorForMember(mid);
-        const radiusL = prevOff ? '0' : '7px';
-        const radiusR = nextOff ? '0' : '7px';
-        const isSick = ((state.holidayReasons[mid]||{})[dISO]) === 'sick';
-        barsHtml += `<div class="hol-bar" data-mid="${mid}" data-date="${dISO}"
-          style="background:${color.bg}; color:${color.fg};
-                 border-top-left-radius:${radiusL}; border-bottom-left-radius:${radiusL};
-                 border-top-right-radius:${radiusR}; border-bottom-right-radius:${radiusR};"
-          title="${escAttr(memberName(mid))}${isSick?' — out of office':''} — click × to remove">
-          <span>${isSick?'<span class="sick-badge">+</span> ':''}${escHtml(memberName(mid))}</span>
-          <span class="hol-bar-x">×</span>
-        </div>`;
-      });
-      const bhName = bankHolidayName(dISO);
-      html += `<div class="day ${otherMonth?'other-month':''} ${weekend?'weekend':''} ${isSelected?'day-selected':''} ${bhName?'bank-holiday':''}" data-date="${dISO}" title="${bhName?escAttr(bhName):''}">
-        <div class="dnum">${d.getDate()}</div>
-        <div class="hol-bars">${barsHtml}</div>
-      </div>`;
-    });
-  }
-  grid.innerHTML = html;
+  grid.innerHTML = holidayCalendarHtml(currentCalMonth, teamMembers().map(m=>m.id), { selected: selectedHolidayDates });
   updateHolidaySelectionBar();
 
   grid.querySelectorAll('.hol-bar').forEach(bar=>{
@@ -8400,29 +8654,8 @@ function drawCalendar(){
       e.stopPropagation();
       const mid = bar.dataset.mid;
       const clickedDate = bar.dataset.date;
-      askConfirm(`Remove ${memberName(mid)}'s time off starting ${clickedDate}?`, 'Remove', async ()=>{
-        // Remove the whole contiguous stretch this bar segment belongs to, not just one day.
-        const dates = (state.holidays[mid]||[]).slice().sort();
-        let runStart = clickedDate, runEnd = clickedDate;
-        while(dates.includes(iso(addDays(new Date(runStart+'T00:00:00'),-1)))) runStart = iso(addDays(new Date(runStart+'T00:00:00'),-1));
-        while(dates.includes(iso(addDays(new Date(runEnd+'T00:00:00'),1)))) runEnd = iso(addDays(new Date(runEnd+'T00:00:00'),1));
-        const removedDates = (state.holidays[mid]||[]).filter(d=> d>=runStart && d<=runEnd);
-        const reasonSnapshot = JSON.parse(JSON.stringify(state.holidayReasons[mid]||{}));
-        state.holidays[mid] = (state.holidays[mid]||[]).filter(d=> d<runStart || d>runEnd);
-        removedDates.forEach(d=>{ if(state.holidayReasons[mid]) delete state.holidayReasons[mid][d]; });
-        await persistHolidays();
-        drawCalendar();
-        drawOffThisWeek();
-        pushUndo(async ()=>{
-          state.holidays[mid] = state.holidays[mid] || [];
-          removedDates.forEach(d=>{ if(!state.holidays[mid].includes(d)) state.holidays[mid].push(d); });
-          state.holidayReasons[mid] = reasonSnapshot;
-          await persistHolidays();
-          drawCalendar(); drawOffThisWeek();
-          showToast('Restored');
-        });
-        showToast('Removed', undoLast);
-      });
+      askConfirm(`Remove ${memberName(mid)}'s time off starting ${clickedDate}?`, 'Remove', ()=>
+        removeHolidayRun(mid, clickedDate, ()=>{ drawCalendar(); drawOffThisWeek(); }));
     });
   });
   grid.querySelectorAll('.day').forEach(day=>{
@@ -8435,20 +8668,96 @@ function drawCalendar(){
   });
 }
 function drawOffThisWeek(){
-  const wk = mondayOf(new Date());
-  const wrap = document.getElementById('off-this-week');
-  const lines = [];
-  for(let i=0;i<DAYS.length;i++){
-    const dISO = iso(addDays(wk,i));
-    const off = teamMembers().filter(m=> (state.holidays[m.id]||[]).includes(dISO));
-    const names = off.map(m=>{
-      const isSick = ((state.holidayReasons[m.id]||{})[dISO]) === 'sick';
-      return isSick ? `${escHtml(m.name)} (out of office)` : escHtml(m.name);
-    });
-    lines.push(`<div style="margin-bottom:4px;"><strong style="color:var(--ink);">${DAY_LABELS[DAYS[i]]}</strong>: ${names.length? names.join(', ') : 'everyone available'}</div>`);
-  }
-  wrap.innerHTML = lines.join('');
+  document.getElementById('off-this-week').innerHTML = offThisWeekHtml(teamMembers().map(m=>m.id), false);
 }
+
+// ---- Department-wide Holidays sheet ----
+// Same calendar, scoped to every team in the department at once, so time off can be seen and
+// entered across the whole department rather than one team at a time. Holidays are already
+// stored per person (not per team), so this is purely a question of which people are in scope.
+let grandCalMonth = new Date(); grandCalMonth.setDate(1);
+let selectedGrandHolidayDates = new Set();
+function grandHolidayMemberIds(){ return departmentMemberIds(currentDepartmentId); }
+function teamNameForMember(mid){
+  const m = state.members.find(x=>x.id===mid);
+  const t = m && state.teams.find(t2=>t2.id===m.teamId);
+  return t ? t.name : '';
+}
+function renderGrandHolidaysTab(){
+  if(!ensureDepartmentSelected()){
+    document.getElementById('ghol-grid').innerHTML = '';
+    document.getElementById('ghol-off-this-week').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
+    return;
+  }
+  document.getElementById('ghol-dept-name').textContent = departmentNameLine();
+  const ids = grandHolidayMemberIds();
+  const sel = document.getElementById('ghol-assign-who');
+  // Grouped by team, because a department-wide list of names on its own gives no clue which
+  // team someone is on — and two teams can easily have people with the same first name.
+  const byTeam = teamsInDepartment(currentDepartmentId).map(t=>{
+    const mem = state.members.filter(m=>m.teamId===t.id);
+    return mem.length===0 ? '' : `<optgroup label="${escAttr(t.name)}">${holidayWhoOptionsHtml(mem)}</optgroup>`;
+  }).join('');
+  sel.innerHTML = byTeam || `<option value="">Nobody in this department yet</option>`;
+  enhanceSelect(sel);
+  enhanceSelect(document.getElementById('ghol-assign-reason'));
+  selectedGrandHolidayDates.clear();
+  drawGrandCalendar();
+  drawGrandOffThisWeek();
+}
+function updateGrandHolidaySelectionBar(){
+  const n = selectedGrandHolidayDates.size;
+  document.getElementById('ghol-selection-text').textContent = n===0
+    ? 'Click a day to select it — you can pick more than one.'
+    : `${n} day${n>1?'s':''} selected`;
+  document.getElementById('ghol-assign-row').style.display = n>0 ? 'flex' : 'none';
+}
+function drawGrandCalendar(){
+  document.getElementById('ghol-label').textContent = grandCalMonth.toLocaleDateString('en-US',{month:'long', year:'numeric'});
+  const grid = document.getElementById('ghol-grid');
+  grid.innerHTML = holidayCalendarHtml(grandCalMonth, grandHolidayMemberIds(), {
+    selected: selectedGrandHolidayDates,
+    nameSuffix: mid=>{ const tn = teamNameForMember(mid); return tn ? ` — ${tn}` : ''; },
+  });
+  updateGrandHolidaySelectionBar();
+  grid.querySelectorAll('.hol-bar').forEach(bar=>{
+    bar.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const mid = bar.dataset.mid;
+      const clickedDate = bar.dataset.date;
+      askConfirm(`Remove ${memberName(mid)}'s time off starting ${clickedDate}?`, 'Remove', ()=>
+        removeHolidayRun(mid, clickedDate, ()=>{ drawGrandCalendar(); drawGrandOffThisWeek(); drawCalendar(); drawOffThisWeek(); }));
+    });
+  });
+  grid.querySelectorAll('.day').forEach(day=>{
+    day.addEventListener('click', ()=>{
+      const dISO = day.dataset.date;
+      if(selectedGrandHolidayDates.has(dISO)) selectedGrandHolidayDates.delete(dISO);
+      else selectedGrandHolidayDates.add(dISO);
+      drawGrandCalendar();
+    });
+  });
+}
+function drawGrandOffThisWeek(){
+  document.getElementById('ghol-off-this-week').innerHTML = offThisWeekHtml(grandHolidayMemberIds(), true);
+}
+document.getElementById('btn-ghol-mark').addEventListener('click', async ()=>{
+  const who = document.getElementById('ghol-assign-who').value;
+  const reason = document.getElementById('ghol-assign-reason').value;
+  if(!who || selectedGrandHolidayDates.size===0) return;
+  const markedDates = [...selectedGrandHolidayDates];
+  selectedGrandHolidayDates.clear();
+  await markHolidayDays(who, reason, markedDates, ()=>{
+    drawGrandCalendar(); drawGrandOffThisWeek();
+    drawCalendar(); drawOffThisWeek(); // the team sheet may be showing this same person
+  });
+});
+document.getElementById('btn-ghol-clear').addEventListener('click', ()=>{
+  selectedGrandHolidayDates.clear();
+  drawGrandCalendar();
+});
+document.getElementById('ghol-prev').addEventListener('click', ()=>{ grandCalMonth.setMonth(grandCalMonth.getMonth()-1); selectedGrandHolidayDates.clear(); drawGrandCalendar(); });
+document.getElementById('ghol-next').addEventListener('click', ()=>{ grandCalMonth.setMonth(grandCalMonth.getMonth()+1); selectedGrandHolidayDates.clear(); drawGrandCalendar(); });
 document.getElementById('cal-prev').addEventListener('click', ()=>{ currentCalMonth.setMonth(currentCalMonth.getMonth()-1); selectedHolidayDates.clear(); drawCalendar(); });
 document.getElementById('cal-next').addEventListener('click', ()=>{ currentCalMonth.setMonth(currentCalMonth.getMonth()+1); selectedHolidayDates.clear(); drawCalendar(); });
 
@@ -9171,56 +9480,37 @@ document.getElementById('v-wk-prev').addEventListener('click', ()=>{ viewerWeekM
 document.getElementById('v-wk-next').addEventListener('click', ()=>{ viewerWeekMonday = addDays(viewerWeekMonday,7); renderViewerScheduleTab(); });
 
 // ---- My holidays (self-service only) ----
+// A viewer in a department with Grand views on sees the whole department's time off — that's
+// the point of the combined views, and holidays are the one thing everyone needs to see across
+// teams to plan around. With Grand off the teams are meant to stay fully independent, so the
+// calendar narrows back to just their own team.
+function viewerHolidayScope(){
+  const myTeam = state.teams.find(t=>t.id===currentTeamId);
+  const dept = myTeam && myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
+  const grandOn = !!(dept && dept.showGrandViews!==false);
+  return {
+    grandOn,
+    ids: grandOn ? departmentMemberIds(dept.id) : teamMembers().map(m=>m.id),
+    label: grandOn ? `Everyone in ${dept.name}` : `Your team${myTeam?` — ${myTeam.name}`:''}`,
+  };
+}
 function renderViewerHolidaysTab(){
   drawViewerCalendar();
 }
 function drawViewerCalendar(){
   document.getElementById('v-cal-label').textContent = viewerCalMonth.toLocaleDateString('en-US',{month:'long', year:'numeric'});
   const grid = document.getElementById('v-cal-grid');
-  let html = '';
-  ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=> html+=`<div class="dow">${d}</div>`);
-  const first = new Date(viewerCalMonth);
-  const firstDow = (first.getDay()+6)%7;
-  const start = addDays(first, -firstDow);
-  const allDates = []; for(let i=0;i<42;i++) allDates.push(iso(addDays(start,i)));
-
-  for(let row=0; row<6; row++){
-    const rowDates = allDates.slice(row*7, row*7+7);
-    const laneSet = new Set();
-    rowDates.forEach(dISO=> teamMembers().forEach(m=>{ if((state.holidays[m.id]||[]).includes(dISO)) laneSet.add(m.id); }));
-    const lanes = Array.from(laneSet).sort((a,b)=> memberName(a).localeCompare(memberName(b)));
-
-    rowDates.forEach((dISO, colIdx)=>{
-      const d = new Date(dISO+'T00:00:00');
-      const otherMonth = d.getMonth()!==viewerCalMonth.getMonth();
-      const weekend = d.getDay()===0 || d.getDay()===6;
-      let barsHtml = '';
-      lanes.forEach(mid=>{
-        const offToday = (state.holidays[mid]||[]).includes(dISO);
-        if(!offToday) return;
-        const prevOff = colIdx>0 && (state.holidays[mid]||[]).includes(rowDates[colIdx-1]);
-        const nextOff = colIdx<6 && (state.holidays[mid]||[]).includes(rowDates[colIdx+1]);
-        const color = colorForMember(mid);
-        const radiusL = prevOff ? '0' : '7px';
-        const radiusR = nextOff ? '0' : '7px';
-        const isMine = mid===viewerIdentityId;
-        const isSick = ((state.holidayReasons[mid]||{})[dISO]) === 'sick';
-        barsHtml += `<div class="hol-bar ${isMine?'hol-bar-mine':'hol-bar-locked'}" data-mid="${mid}" data-date="${dISO}"
-          style="background:${color.bg}; color:${color.fg};
-                 border-top-left-radius:${radiusL}; border-bottom-left-radius:${radiusL};
-                 border-top-right-radius:${radiusR}; border-bottom-right-radius:${radiusR};"
-          title="${escAttr(memberName(mid))}${isSick?' — out of office':''}${isMine?' — click × to remove':''}">
-          <span>${isSick?'<span class="sick-badge">+</span> ':''}${escHtml(memberName(mid))}</span>
-          ${isMine?'<span class="hol-bar-x">×</span>':''}
-        </div>`;
-      });
-      html += `<div class="day ${otherMonth?'other-month':''} ${weekend?'weekend':''}" data-date="${dISO}">
-        <div class="dnum">${d.getDate()}</div>
-        <div class="hol-bars">${barsHtml}</div>
-      </div>`;
-    });
-  }
-  grid.innerHTML = html;
+  const scope = viewerHolidayScope();
+  const scopeLabel = document.getElementById('v-cal-scope');
+  if(scopeLabel) scopeLabel.textContent = scope.label;
+  grid.innerHTML = holidayCalendarHtml(viewerCalMonth, scope.ids, {
+    selected: null,
+    laneGaps: false,
+    bankHolidays: false,
+    canRemove: mid=> mid===viewerIdentityId,
+    barClass: mid=> mid===viewerIdentityId ? 'hol-bar-mine' : 'hol-bar-locked',
+    nameSuffix: mid=>{ const tn = scope.grandOn ? teamNameForMember(mid) : ''; return tn ? ` — ${tn}` : ''; },
+  });
 
   grid.querySelectorAll('.hol-bar-mine').forEach(bar=>{
     bar.addEventListener('click', (e)=>{
