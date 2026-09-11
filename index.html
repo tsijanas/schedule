@@ -6766,6 +6766,34 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
     b[entry.member.id][entry.task.id] = (b[entry.member.id][entry.task.id]||0) + 1;
   }
   function balanceFor(entry){ return (balances[entry.team.id]?.[entry.member.id]?.[entry.task.id]) || 0; }
+  // Same "combine with" behavior as the main generator, applied here too — a person picked
+  // through this department-wide rotation still gets their second task, scoped to their own
+  // team's own task list, since combine-with (like exclusions) always stays local per team
+  // even for a task that's otherwise shared and rotated. Writes directly into teamSchedules
+  // so the caller's own save picks it up along with everything else.
+  function applyCombineWith(entry, dISO){
+    const teamTasks = state.tasksByTeam[entry.team.id] || [];
+    const targetIds = new Set(combineWithOf(entry.task, teamTasks));
+    if(targetIds.size===0) return;
+    let options = teamTasks.filter(t=>
+      targetIds.has(t.id) && t.id!==entry.task.id && entry.member.eligibility[t.id]
+      && levelAllowed(t, entry.member.levels) && canAssign({member:entry.member, task:t, team:entry.team}, dISO)
+    );
+    options.sort((a,b)=>{
+      const ba = (balances[entry.team.id]?.[entry.member.id]?.[a.id])||0;
+      const bb = (balances[entry.team.id]?.[entry.member.id]?.[b.id])||0;
+      return ba-bb || a.name.localeCompare(b.name);
+    });
+    options = shuffleTiedGroups(options, t=> (balances[entry.team.id]?.[entry.member.id]?.[t.id])||0);
+    const secondTask = options[0] || null;
+    if(!secondTask) return;
+    markAssigned({member:entry.member, task:secondTask, team:entry.team}, dISO);
+    teamSchedules[entry.team.id][dISO] = teamSchedules[entry.team.id][dISO] || {};
+    teamSchedules[entry.team.id][dISO][secondTask.id] = teamSchedules[entry.team.id][dISO][secondTask.id] || [];
+    if(!teamSchedules[entry.team.id][dISO][secondTask.id].includes(entry.member.id)){
+      teamSchedules[entry.team.id][dISO][secondTask.id].push(entry.member.id);
+    }
+  }
 
   const resultsByTeam = {};
   g.perTeam.forEach(({team})=> resultsByTeam[team.id] = {});
@@ -6795,7 +6823,7 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
     });
     candidates = shuffleTiedGroups(candidates, entry=> balanceFor(entry));
     const picked = candidates.slice(0, need);
-    neededDays.forEach(dISO=> picked.forEach(entry=> markAssigned(entry, dISO)));
+    neededDays.forEach(dISO=> picked.forEach(entry=>{ markAssigned(entry, dISO); applyCombineWith(entry, dISO); }));
     dates.forEach(dISO=>{
       g.perTeam.forEach(({team})=>{
         resultsByTeam[team.id][dISO] = neededDays.includes(dISO)
@@ -6826,7 +6854,7 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
     });
     candidates = shuffleTiedGroups(candidates, entry=> `${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
     const picked = candidates.slice(0, need);
-    picked.forEach(entry=> markAssigned(entry, dISO));
+    picked.forEach(entry=>{ markAssigned(entry, dISO); applyCombineWith(entry, dISO); });
     g.perTeam.forEach(({team})=>{
       resultsByTeam[team.id][dISO] = picked.filter(entry=>entry.team.id===team.id).map(entry=>entry.member.id);
     });
@@ -7041,15 +7069,10 @@ async function generateWeek(weekMon, opts){
   // among whichever of the selected tasks are actually eligible and free that day, the same
   // fairness rule as everything else in this generator. No fallback if none of the selected
   // tasks work out that day, since forcing a pairing that doesn't fit would be worse than just
-  // leaving it. combineWithOf normalizes older single-value/'__rotational__' data.
-  function combineWithOf(task){
-    if(Array.isArray(task.combineWith)) return task.combineWith;
-    if(task.combineWith === '__rotational__') return tasksSorted.filter(t=>t.id!==task.id).map(t=>t.id);
-    return task.combineWith ? [task.combineWith] : [];
-  }
-  const combineTasks = tasksSorted.filter(t=> combineWithOf(t).length>0);
+  // leaving it.
+  const combineTasks = tasksSorted.filter(t=> combineWithOf(t, tasksSorted).length>0);
   combineTasks.forEach(task=>{
-    const targetIds = new Set(combineWithOf(task));
+    const targetIds = new Set(combineWithOf(task, tasksSorted));
     dates.forEach(dISO=>{
       if(isBankHoliday(dISO)) return;
       const assignedIds = (schedule[dISO][task.id]||[]).slice();
@@ -7439,6 +7462,13 @@ function existingTasksForMemberOnDate(memberId, dateISO, schedule){
 // Normalizes a task's "cannot combine with" setting to an array — handles both the current
 // multi-select format and any older single-value data that hasn't been re-saved yet.
 function excludesOf(task){ return Array.isArray(task.excludes) ? task.excludes : (task.excludes ? [task.excludes] : []); }
+// Same idea for "combine with" — allTeamTasks is that task's own team's full task list, used
+// only for the older '__rotational__' marker, which meant "anything else on this team."
+function combineWithOf(task, allTeamTasks){
+  if(Array.isArray(task.combineWith)) return task.combineWith;
+  if(task.combineWith === '__rotational__') return (allTeamTasks||[]).filter(t=>t.id!==task.id).map(t=>t.id);
+  return task.combineWith ? [task.combineWith] : [];
+}
 function canAssignNow(member, task, dateISO, schedule){
   const existing = existingTasksForMemberOnDate(member.id, dateISO, schedule);
   if(existing.includes(task.id)) return false;
