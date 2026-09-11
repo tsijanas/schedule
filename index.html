@@ -9,7 +9,16 @@
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#FFE13B">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://www.gstatic.com">
+<link rel="preconnect" href="https://firestore.googleapis.com">
+<!-- Loaded non-blocking on purpose. As a plain stylesheet this sat in the critical path and
+     nothing painted until Google Fonts answered — on a slow or filtered network that's the
+     single biggest chunk of "the app is slow to load". The faces already use display=swap, so
+     text shows immediately in the fallback stack and swaps when the webfont arrives. -->
+<link rel="stylesheet" media="print" onload="this.media='all'; this.onload=null;"
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap"></noscript>
 <style>
   :root{
     --bg:#FFFFFF;
@@ -577,12 +586,15 @@
   .people-table .pt-name .m-name:hover, .people-table .pt-name .m-name:focus{ border-color:var(--line); background:#fff; }
   .people-table .member-card-summary{ display:flex; flex-wrap:wrap; gap:3px; margin-top:2px; }
   .people-table .member-card-summary:empty{ display:none; }
-  .people-table .pt-level{ min-width:124px; }
-  .people-table .pt-team{ min-width:140px; }
-  .people-table .pt-role{ min-width:126px; }
+  .people-table .pt-level{ min-width:78px; width:78px; }
+  .people-table .pt-team{ min-width:104px; width:104px; }
+  .people-table .pt-role{ min-width:96px; width:96px; }
   .people-table .pt-email{ min-width:210px; }
   .people-table .pt-bday{ min-width:112px; }
-  .people-table .pt-team select, .people-table .pt-role select, .people-table .m-manager-dept{ width:100%; font-size:12px; padding:4px 6px; }
+  /* Tighter type and padding in the narrow columns, so more of a team or department name
+     survives the squeeze — the native dropdown still shows every option in full when opened. */
+  .people-table .pt-level .ms-dropdown-trigger{ font-size:11.5px; padding:4px 5px; }
+  .people-table .pt-team select, .people-table .pt-role select, .people-table .m-manager-dept{ width:100%; font-size:11.5px; padding:4px 4px; }
   .people-table .pt-email input{ width:100%; font-size:12px; padding:4px 6px; }
   .people-table .m-manager-dept-row{ margin-top:3px; }
   .people-table .pt-bday-pair{ display:flex; gap:4px; }
@@ -853,11 +865,12 @@
       </div>
       <div class="card" id="invites-card" style="display:none;">
         <h3>Waiting to join <span class="muted" style="font-weight:400; font-size:12px;" id="invites-team-label"></span></h3>
-        <div class="hint">People who have an email on file for this team but haven't created their account yet. Send them the join link above, or a personal one from here.</div>
+        <div class="hint">People who have an email on file for this team but haven't created their account yet. They all join through the same link — copy it below, or send it to this whole list in one email.</div>
         <div class="row" style="margin:10px 0 14px 0;">
           <span class="muted" id="invites-summary"></span>
           <div class="spacer"></div>
-          <button class="btn secondary small" id="btn-email-all-pending">Email all pending</button>
+          <button class="btn secondary small" id="btn-copy-join-link-2">Copy join link</button>
+          <button class="btn secondary small" id="btn-email-all-pending">Email everyone the link</button>
         </div>
         <div id="invites-list"></div>
       </div>
@@ -1972,8 +1985,16 @@ let lastStorageError = null; // { when, what } — surfaced in the banner itself
 async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
   const dirtyTaskTeams = [];
   await Promise.all(teamIds.map(async teamId=>{
+    // Fetched together, not one after another — they're independent documents, and chaining
+    // them made every team three network round trips deep instead of one.
+    const [ttRes, rrRes, rlRes] = await Promise.allSettled([
+      window.storage.get('tasks_'+teamId, true),
+      window.storage.get('weekly_req_'+teamId, true),
+      window.storage.get('weekly_req_levels_'+teamId, true),
+    ]);
     try{
-      const tt = await window.storage.get('tasks_'+teamId, true);
+      if(ttRes.status==='rejected') throw ttRes.reason;
+      const tt = ttRes.value;
       state.tasksByTeam[teamId] = tt ? JSON.parse(tt.value) : (legacyTasks || JSON.parse(JSON.stringify(DEFAULT_TASKS)));
     }catch(e){
       // A genuine failure here (network blip, timeout) must never silently substitute a
@@ -1987,7 +2008,8 @@ async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
       updateStorageBanner();
     }
     try{
-      const rr = await window.storage.get('weekly_req_'+teamId, true);
+      if(rrRes.status==='rejected') throw rrRes.reason;
+      const rr = rrRes.value;
       state.reqByTeam[teamId] = rr ? JSON.parse(rr.value) : (legacyReq || JSON.parse(JSON.stringify(DEFAULT_REQ)));
     }catch(e){
       console.error('Could not load requirements for team', teamId, e);
@@ -1996,7 +2018,8 @@ async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
       updateStorageBanner();
     }
     try{
-      const rl = await window.storage.get('weekly_req_levels_'+teamId, true);
+      if(rlRes.status==='rejected') throw rlRes.reason;
+      const rl = rlRes.value;
       state.reqLevelsByTeam[teamId] = rl ? JSON.parse(rl.value) : {};
     }catch(e){
       console.error('Could not load requirement levels for team', teamId, e);
@@ -3644,7 +3667,7 @@ function renderInvitesCard(){
   document.getElementById('invites-summary').textContent = `${pending.length} pending`;
   const emailAllBtn = document.getElementById('btn-email-all-pending');
   emailAllBtn.disabled = pending.length===0;
-  emailAllBtn.textContent = pending.length>0 ? `Email all pending (${pending.length})` : 'No one pending';
+  emailAllBtn.textContent = pending.length>0 ? `Email everyone the link (${pending.length})` : 'No one pending';
 
   wrap.innerHTML = pending.map(m=>{
     const contact = memberContacts[m.id];
@@ -3653,8 +3676,7 @@ function renderInvitesCard(){
       <span class="invite-name">${m.name ? escHtml(m.name) : '<span class="muted" style="font-weight:400;">(name pending)</span>'}</span>
       <span class="muted invite-email">${escHtml(contact.email)}</span>
       <div class="spacer"></div>
-      <button type="button" class="btn secondary small btn-copy-invite" data-mid="${m.id}">Copy link</button><button type="button" class="btn secondary small btn-email-invite" data-mid="${m.id}">Email</button>
-      <button type="button" class="btn-remove-x btn-remove-invite" data-mid="${m.id}" title="Remove entirely">×</button>
+      <button type="button" class="btn-remove-x btn-remove-invite" data-mid="${m.id}" title="Cancel this invite">×</button>
     </div>`;
   }).join('');
   wrap.querySelectorAll('.btn-remove-invite').forEach(btn=>{
@@ -3670,22 +3692,6 @@ function renderInvitesCard(){
         undoRemovePerson(removed);
         showToast(`Removed ${removed.member.name || removed.contact.email}`, undoLast);
       });
-    });
-  });
-  wrap.querySelectorAll('.btn-copy-invite').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const info = buildInviteLink(btn.dataset.mid);
-      if(!info) return;
-      try{ await navigator.clipboard.writeText(info.link); showToast('Invite link copied'); }
-      catch(e){ showToast('Could not copy automatically — link: '+info.link); }
-    });
-  });
-  wrap.querySelectorAll('.btn-email-invite').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const info = buildInviteLink(btn.dataset.mid);
-      if(!info) return;
-      const {subject, body} = emailInviteSubjectBody(info);
-      window.location.href = `mailto:${encodeURIComponent(info.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     });
   });
 }
@@ -3780,19 +3786,6 @@ function undoRemovePerson(removed){
     renderTeamTab(); renderTeamsList();
     showToast('Restored');
   });
-}
-function buildInviteLink(mid){
-  const m = state.members.find(x=>x.id===mid);
-  const email = (memberContacts[mid]&&memberContacts[mid].email) || '';
-  if(!email) return null;
-  return { email, name: m?.name||'', link: `${window.location.origin}/login.html?invite_email=${encodeURIComponent(email)}&invite_name=${encodeURIComponent(m?.name||'')}` };
-}
-function emailInviteSubjectBody(info){
-  const teamName = state.teams.find(t=>t.id===currentTeamId)?.name || 'the team';
-  const subject = `You're invited to Schedule`;
-  const firstName = (info.name||'').split(' ')[0] || 'there';
-  const body = `Hi ${firstName},\n\nYou've been added to ${teamName}'s schedule. Click the link below to set a password and see your schedule right away:\n\n${info.link}\n\nThanks!`;
-  return { subject, body };
 }
 // Deleting a member's row used to leave three things behind: their holiday history (orphaned,
 // nobody's), and their uid still sitting in access_control/approved (and managers, if they had
@@ -3999,7 +3992,6 @@ function renderTeamTab(){
         return `<td class="pt-task-cell" data-task="${escAttr(t.id)}"><span class="checkbox ${on?'checked':''}" data-task="${t.id}" role="checkbox" aria-checked="${on}" tabindex="0" title="${escAttr(t.name)}">${checkSvg}</span></td>`;
       }).join('')}
       <td class="pt-actions">
-        ${pendingInvite ? `<button type="button" class="btn-icon btn-copy-invite" data-mid="${m.id}" title="Copy this person's invite link">🔗</button><button type="button" class="btn-icon btn-email-invite" data-mid="${m.id}" title="Email this person their invite">✉</button>` : ''}
         <button class="btn-remove-x btn-del-member" title="Remove">×</button>
       </td>
     </tr>`;
@@ -4190,26 +4182,6 @@ function renderTeamTab(){
     });
   });
 // ---- Revoking access on removal ----
-  wrap.querySelectorAll('.btn-copy-invite').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const info = buildInviteLink(btn.dataset.mid);
-      if(!info){ showToast("No email on file for this person yet"); return; }
-      try{
-        await navigator.clipboard.writeText(info.link);
-        showToast('Invite link copied');
-      }catch(e){
-        showToast('Could not copy automatically — link: '+info.link);
-      }
-    });
-  });
-  wrap.querySelectorAll('.btn-email-invite').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const info = buildInviteLink(btn.dataset.mid);
-      if(!info){ showToast("No email on file for this person yet"); return; }
-      const {subject, body} = emailInviteSubjectBody(info);
-      window.location.href = `mailto:${encodeURIComponent(info.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    });
-  });
   wrap.querySelectorAll('.btn-del-member').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const card = btn.closest('.member-card');
@@ -4487,7 +4459,7 @@ document.getElementById('btn-invite-people').addEventListener('click', openInvit
 // One link the whole team can use. Unlike a personal invite link it carries no email, so it
 // works for anyone who hasn't confirmed their account yet — they sign up with their own work
 // address and land straight on their schedule.
-document.getElementById('btn-copy-join-link').addEventListener('click', async ()=>{
+async function copyJoinLink(){
   const link = `${window.location.origin}/login.html?invited=1`;
   try{
     await navigator.clipboard.writeText(link);
@@ -4496,7 +4468,9 @@ document.getElementById('btn-copy-join-link').addEventListener('click', async ()
     showToast('Copy this link: '+link);
   }
   logAudit('invite.copy_join_link', { teamId: currentTeamId });
-});
+}
+document.getElementById('btn-copy-join-link').addEventListener('click', copyJoinLink);
+document.getElementById('btn-copy-join-link-2').addEventListener('click', copyJoinLink);
 document.getElementById('invite-cancel').addEventListener('click', closeInviteModal);
 document.getElementById('invite-confirm').addEventListener('click', async ()=>{
   const rows = parseInviteRows(document.getElementById('invite-emails-text').value);
