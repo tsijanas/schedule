@@ -2660,7 +2660,7 @@ async function renderIdeasTab(){
         const notifs = await loadMyNotifications();
         const unread = notifs.filter(n=> n.kind==='idea_submitted' && !n.read);
         if(unread.length>0){
-          const { doc: fsDoc, updateDoc: fsUpdateDoc, collection: fsCollection } = window.rotaDb;
+          const { db, doc: fsDoc, updateDoc: fsUpdateDoc, collection: fsCollection } = window.rotaDb;
           for(const n of unread){
             try{ await fsUpdateDoc(fsDoc(fsCollection(db,'notifications',viewerIdentityId,'items'), n.id), { read:true }); }catch(e){}
           }
