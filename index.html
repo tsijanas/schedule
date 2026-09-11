@@ -86,6 +86,10 @@
   .sidebar-section-label{ padding:4px 12px 6px 12px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--sidebar-ink); opacity:0.55; }
   .mode-admin .team-section{ border:1px solid var(--gold); border-radius:14px; padding-bottom:4px; }
   .team-section-label{ color:var(--gold); opacity:1; padding-top:12px; }
+  .sidebar-title-label{
+    font-family:'Fraunces',serif; font-weight:600; font-size:15px; letter-spacing:0.1px;
+    text-transform:none; opacity:1; padding-top:10px; padding-bottom:8px;
+  }
   .nav-submenu-toggle{
     display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%;
     padding:10px 12px; border-radius:10px; color:var(--sidebar-ink); opacity:0.72;
@@ -632,7 +636,7 @@
     </div>
 
     <div class="sidebar-panel admin-only" id="grand-nav-box" style="display:none;">
-      <div class="sidebar-section-label">Department-wide</div>
+      <div class="sidebar-section-label sidebar-title-label">Department</div>
       <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
       <button class="nav-item admin-only" data-tab="grand-tasks" id="nav-grand-tasks">Tasks</button>
       <button class="nav-item admin-only" data-tab="grand-req" id="nav-grand-req">Requirement</button>
@@ -647,7 +651,7 @@
     </div>
 
     <div class="sidebar-panel team-section">
-      <div class="sidebar-section-label team-section-label admin-only">Team</div>
+      <div class="sidebar-section-label team-section-label sidebar-title-label admin-only">Team</div>
       <button class="nav-item admin-only active" data-tab="tasks">Tasks</button>
       <button class="nav-item admin-only" data-tab="requirements">Requirement</button>
       <button class="nav-item admin-only" data-tab="org">Teams &amp; People</button>
@@ -684,17 +688,7 @@
     <div class="tab-panel active" id="tab-org">
       <div class="page-head">
         <h1>Teams &amp; People</h1>
-        <p>Create teams and set a manager for each, then add people, assign them to a team, and set which tasks they can work. This is the source of truth the scheduler reads from.</p>
-      </div>
-      <div class="card">
-        <h3>Teams</h3>
-        <div class="muted" id="team-dept-hint" style="font-size:11.5px; margin-bottom:10px; display:none;">Set from the Departments tab, not here.</div>
-        <div class="row" style="margin-bottom:14px;">
-          <button class="btn secondary small" id="btn-add-team">+ Add team</button>
-          <div class="spacer"></div>
-          <button class="btn small" id="btn-save-teams">Save changes</button>
-        </div>
-        <div id="teams-list"></div>
+        <p>Add people, assign them to this team, and set which tasks they can work. This is the source of truth the scheduler reads from. Create or edit teams themselves from the Departments tab.</p>
       </div>
       <div class="card" id="invites-card" style="display:none;">
         <h3>Invites <span class="muted" style="font-weight:400; font-size:12px;" id="invites-team-label"></span></h3>
@@ -1089,6 +1083,7 @@
             <option value="idea">Ideas only</option>
             <option value="bug">Bugs only</option>
           </select>
+          <label class="chip-check" style="white-space:nowrap;"><input type="checkbox" id="idea-show-archived"> Show archived</label>
           <button class="btn secondary small" id="btn-refresh-ideas">Refresh</button>
         </div>
         <div id="idea-form-body" style="display:none; margin-bottom:18px; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--paper);">
@@ -2213,16 +2208,39 @@ function renderDeptSetupCard(){
   }
 
   const moveSelectHtml = (currentDeptId, teamId)=>{
-    let opts = `<option value="__none__">No department</option>`;
-    opts += state.departments.map(d=>`<option value="${d.id}" ${d.id===currentDeptId?'selected':''}>${escHtml(d.name)}</option>`).join('');
+    const opts = state.departments.map(d=>`<option value="${d.id}" ${d.id===currentDeptId?'selected':''}>${escHtml(d.name)}</option>`).join('');
     return `<label style="font-size:11px; color:var(--ink-soft); display:flex; align-items:center; gap:5px; flex-shrink:0;">Move to: <select class="dept-team-move-select" data-team="${teamId}">${opts}</select></label>`;
   };
 
-  const teamRowHtml = (dept, t)=> `<div class="dept-team-row" data-team="${t.id}" style="display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px;">
+  // Manager options are scoped to just this department's own members — the same person can't
+  // manage a team in a department they're not even part of.
+  const managerOptionsFor = dept=>{
+    const idsInDept = new Set(teamsIn(dept).map(t=>t.id));
+    return state.members.filter(m=>idsInDept.has(m.teamId));
+  };
+
+  const teamRowHtml = (dept, t)=> {
+    const tc = colorForTeam(t.id);
+    const count = state.members.filter(m=>m.teamId===t.id).length;
+    const managerOptions = dept ? managerOptionsFor(dept) : [];
+    return `<div class="dept-team-row" data-team="${t.id}" style="display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px;">
+    <div class="team-color-picker-wrap">
+      <button type="button" class="team-color-dot" data-team="${t.id}" style="background:${tc.bg};" title="Click to change this team's color"></button>
+      <div class="team-color-swatches">
+        ${lightPaletteForPicker().map((c,ci)=>`<button type="button" class="team-color-swatch ${t.colorIndex===ci?'selected':''}" data-team="${t.id}" data-ci="${ci}" style="background:${c.bg};"></button>`).join('')}
+      </div>
+    </div>
     <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
+    <select class="dept-team-manager-edit" data-team="${t.id}">
+      <option value="">— no manager set —</option>
+      ${managerOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
+    </select>
+    <span class="muted" style="font-size:11.5px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
     ${moveSelectHtml(dept ? dept.id : '__none__', t.id)}
+    <button type="button" class="btn secondary small dept-team-duplicate-btn" data-team="${t.id}" title="Create a new team with the same tasks and weekly needs">Duplicate</button>
     <button type="button" class="btn-remove-x dept-team-remove-btn" data-team="${t.id}" title="Remove team">×</button>
   </div>`;
+  };
 
   const listHtml = state.departments.map(dept=> `<div class="dept-card" data-dept="${dept.id}" style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
     <input type="text" class="dept-name-edit" data-dept="${dept.id}" value="${escAttr(dept.name)}" style="font-weight:700; font-size:14px; border:none; background:none; padding:0; width:100%; margin-bottom:8px;">
@@ -2239,11 +2257,13 @@ function renderDeptSetupCard(){
     </div>
   </div>`).join('');
 
-  // Teams with no department at all — shown once, below every department card, each with its
-  // own "move" so it's easy to place stray/ungrouped teams without leaving this tab.
+  // Teams with no department at all — a leftover from before this became required. Shown so
+  // an admin can resolve any that already exist; a team can no longer become ungrouped going
+  // forward (there's no "no department" option in the move dropdown above, and new teams only
+  // ever get created from within a department's own "+ New team" button).
   const ungroupedTeams = state.teams.filter(t=>!t.departmentId);
   const ungroupedHtml = ungroupedTeams.length>0 ? `<div style="border:1px dashed var(--line); border-radius:10px; padding:14px; margin-bottom:16px;">
-    <div style="font-weight:700; font-size:13.5px; margin-bottom:8px;">Not in a department</div>
+    <div style="font-weight:700; font-size:13.5px; margin-bottom:8px;">Not in a department — move each into one</div>
     ${ungroupedTeams.map(t=>teamRowHtml(null, t)).join('')}
   </div>` : '';
 
@@ -2256,9 +2276,10 @@ function renderDeptSetupCard(){
       <label class="chip-check" style="display:inline-flex;"><input type="checkbox" id="dept-grand-views-toggle" checked> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
       <div class="muted" style="font-size:11px; margin-top:4px;">Off = teams stay fully independent — no combined view, no shared requirement.</div>
     </div>
-    <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward here, or from Team &amp; People's "+ Add team".</div>
+    <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward with "+ New team in this department" above.</div>
     <div class="row" style="margin-top:14px;"><div class="spacer"></div><button class="btn small" id="btn-create-dept">Create department</button></div>
   `;
+  enhanceSelectsIn(wrap);
   wrap.querySelectorAll('.dept-team-name-edit').forEach(inp=>{
     const saveIfChanged = async ()=>{
       const team = state.teams.find(t=>t.id===inp.dataset.team);
@@ -2281,6 +2302,59 @@ function renderDeptSetupCard(){
     inp.addEventListener('blur', saveIfChanged);
     inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
     inp.addEventListener('click', e=> e.stopPropagation());
+  });
+  wrap.querySelectorAll('.dept-team-manager-edit').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const team = state.teams.find(t=>t.id===sel.dataset.team);
+      if(!team) return;
+      const prevManagerId = team.managerId;
+      team.managerId = sel.value || null;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){ logAudit('team.manager_change', { team: team.name }); }
+      else { team.managerId = prevManagerId; renderDeptSetupCard(); }
+    });
+  });
+  wrap.querySelectorAll('.team-color-dot').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const swatches = btn.nextElementSibling;
+      const wasOpen = swatches.classList.contains('open');
+      wrap.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
+      if(!wasOpen) swatches.classList.add('open');
+    });
+  });
+  wrap.querySelectorAll('.team-color-swatch').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const team = state.teams.find(t=>t.id===btn.dataset.team);
+      if(!team) return;
+      team.colorIndex = +btn.dataset.ci;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){ logAudit('team.color_change', { name: team.name }); }
+      renderDeptSetupCard();
+      renderTeamSwitcher();
+      applyTeamAccent();
+    });
+  });
+  wrap.querySelectorAll('.dept-team-duplicate-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const source = state.teams.find(t=>t.id===btn.dataset.team);
+      if(!source) return;
+      const ti = state.teams.indexOf(source);
+      const newId = 'team_'+Math.random().toString(36).slice(2,9);
+      state.teams.splice(ti+1, 0, { id:newId, name:`${source.name} (copy)`, managerId:null, departmentId:source.departmentId||null });
+      state.tasksByTeam[newId] = JSON.parse(JSON.stringify(state.tasksByTeam[source.id]||[]));
+      state.reqByTeam[newId] = JSON.parse(JSON.stringify(state.reqByTeam[source.id]||{}));
+      const ok = await safeSet('teams', state.teams);
+      if(ok){
+        await safeSet('tasks_'+newId, state.tasksByTeam[newId], true);
+        await safeSet('weekly_req_'+newId, state.reqByTeam[newId], true);
+        logAudit('team.duplicate', { from: source.name, to: `${source.name} (copy)` });
+        showToast(`Duplicated ${source.name} — same tasks and weekly needs, no people yet`);
+      }
+      renderDeptSetupCard();
+      renderTeamSwitcher();
+    });
   });
   document.getElementById('btn-create-dept').addEventListener('click', async ()=>{
     const deptName = document.getElementById('dept-name-input').value.trim();
@@ -2336,15 +2410,15 @@ function renderDeptSetupCard(){
     sel.addEventListener('change', async ()=>{
       const team = state.teams.find(t=>t.id===sel.dataset.team);
       if(!team) return;
-      const newDeptId = sel.value==='__none__' ? null : sel.value;
+      const newDeptId = sel.value;
       const prevDeptId = team.departmentId || null;
       if(newDeptId===prevDeptId) return;
       team.departmentId = newDeptId;
       const ok = await safeSet('teams', state.teams);
       if(ok){
-        const newDeptName = newDeptId ? (state.departments.find(d=>d.id===newDeptId)?.name||'') : 'no department';
+        const newDeptName = state.departments.find(d=>d.id===newDeptId)?.name||'';
         showToast(`Moved ${team.name} to ${newDeptName}`);
-        logAudit('team.department_move', { team: team.name, from: prevDeptId||'(none)', to: newDeptId||'(none)' });
+        logAudit('team.department_move', { team: team.name, from: prevDeptId||'(none)', to: newDeptId });
         renderTeamSwitcher();
       } else {
         team.departmentId = prevDeptId;
@@ -2379,6 +2453,8 @@ function renderDeptSetupCard(){
 const IDEA_STATUS_LABELS = { backlog:'Backlog', in_progress:'In progress', done:'Done' };
 const IDEA_PRIORITY_LABELS = { low:'Low priority', medium:'Medium priority', high:'High priority' };
 const IDEA_STATUS_COLOR = { backlog:'ink-soft', in_progress:'gold', done:'sage' };
+const IDEA_ARCHIVE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+const isIdeaArchived = item=> item.status==='done' && item.doneAt && (Date.now() - item.doneAt) > IDEA_ARCHIVE_AFTER_MS;
 async function renderIdeasTab(){
   const wrap = document.getElementById('ideas-list');
   wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
@@ -2389,6 +2465,8 @@ async function renderIdeasTab(){
     snap.forEach(d=> items.push({ id:d.id, ...d.data() }));
     const typeFilter = document.getElementById('idea-filter-type').value;
     if(typeFilter) items = items.filter(i=>i.type===typeFilter);
+    const showArchived = document.getElementById('idea-show-archived').checked;
+    if(!showArchived) items = items.filter(i=>!isIdeaArchived(i));
     if(items.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Nothing here yet.</div>`; return; }
 
     let html = '';
@@ -2401,12 +2479,14 @@ async function renderIdeasTab(){
       } else {
         group.forEach(item=>{
           const when = item.submittedAt ? new Date(item.submittedAt).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '';
+          const archivedBadge = isIdeaArchived(item) ? `<span class="idea-priority-pill" style="background:var(--line); color:var(--ink-soft);">Archived</span>` : '';
           html += `<div class="idea-row" data-id="${escAttr(item.id)}">
             <span class="idea-drag-handle" draggable="true" title="Drag to change status">⠿</span>
             <button class="card-expand-toggle" title="Expand">${chevronSvg}</button>
             <span class="idea-type-dot ${item.type==='bug'?'bug':'idea'}" title="${item.type==='bug'?'Bug':'Idea'}"></span>
             <span class="idea-row-title">${escHtml(item.title||'Untitled')}</span>
             <span class="idea-priority-pill priority-${item.priority||'medium'}">${(IDEA_PRIORITY_LABELS[item.priority]||'Medium priority').replace(' priority','')}</span>
+            ${archivedBadge}
             <span class="idea-row-meta">${escHtml(item.submittedByName||'Unknown')}${when?' · '+when:''}</span>
             <select class="idea-status-pick" data-status="${item.status}">${Object.entries(IDEA_STATUS_LABELS).map(([v,l])=>`<option value="${v}" ${item.status===v?'selected':''}>${l}</option>`).join('')}</select>
             <button class="btn-remove-x btn-del-idea" title="Delete">×</button>
@@ -2416,6 +2496,13 @@ async function renderIdeasTab(){
             <div class="idea-row-priority-pick">
               <label>Priority</label>
               <select class="idea-priority-pick">${Object.entries(IDEA_PRIORITY_LABELS).map(([v,l])=>`<option value="${v}" ${item.priority===v?'selected':''}>${l}</option>`).join('')}</select>
+            </div>
+            <div class="idea-comments" data-id="${escAttr(item.id)}">
+              <div class="idea-comments-list muted" style="font-size:11.5px;">Loading comments…</div>
+              <div class="row" style="margin-top:6px; gap:6px;">
+                <input type="text" class="idea-comment-input" placeholder="Add a comment…" style="flex:1; font-size:12.5px;">
+                <button type="button" class="btn secondary small idea-comment-post">Post</button>
+              </div>
             </div>
           </div>`;
         });
@@ -2436,7 +2523,12 @@ async function renderIdeasTab(){
     async function changeIdeaStatus(id, newStatus){
       try{
         const { db, doc, updateDoc } = window.rotaDb;
-        await updateDoc(doc(db,'ideas_log', id), { status: newStatus });
+        // doneAt tracks when a status last became 'done' — the 30-day auto-archive clock reads
+        // off this. Cleared if moved off 'done' again, so a re-opened item doesn't stay eligible
+        // to archive based on a stale timestamp from before.
+        const patch = { status: newStatus };
+        patch.doneAt = newStatus==='done' ? Date.now() : null;
+        await updateDoc(doc(db,'ideas_log', id), patch);
         logAudit('idea.status_change', { id, status: newStatus });
         renderIdeasTab();
       }catch(e){ console.error('Could not update status', e); showToast('Could not update — are you an Admin?'); renderIdeasTab(); }
@@ -2472,8 +2564,58 @@ async function renderIdeasTab(){
       });
     });
 
+    // Comments load lazily, only for the item actually being expanded — avoids one Firestore
+    // read per item on every render when most rows will never get opened in a given visit.
+    async function loadAndRenderComments(ideaId, listEl){
+      try{
+        const { db, collection, query: fsQuery, orderBy: fsOrderBy, getDocs: fsGetDocs } = window.rotaDb;
+        const snap2 = await fsGetDocs(fsQuery(collection(db,'ideas_log', ideaId, 'comments'), fsOrderBy('createdAt','asc')));
+        const comments = [];
+        snap2.forEach(d=> comments.push({ id:d.id, ...d.data() }));
+        listEl.innerHTML = comments.length===0
+          ? `<div class="muted" style="font-size:11.5px;">No comments yet.</div>`
+          : comments.map(c=>{
+              const t = c.createdAt ? new Date(c.createdAt).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '';
+              return `<div class="idea-comment-row" style="font-size:12px; padding:4px 0; border-top:1px solid var(--line);">
+                <strong>${escHtml(c.authorName||'Someone')}</strong>${t?` · ${t}`:''}<br>${escHtml(c.text||'')}
+              </div>`;
+            }).join('');
+      }catch(e){ console.error('Could not load comments', e); listEl.innerHTML = `<div class="muted" style="font-size:11.5px;">Couldn't load comments.</div>`; }
+    }
     wrap.querySelectorAll('.card-expand-toggle').forEach(btn=>{
-      btn.addEventListener('click', ()=> btn.closest('.idea-row').classList.toggle('expanded'));
+      btn.addEventListener('click', ()=>{
+        const row = btn.closest('.idea-row');
+        row.classList.toggle('expanded');
+        if(row.classList.contains('expanded')){
+          const commentsBlock = row.nextElementSibling.querySelector('.idea-comments');
+          const listEl = commentsBlock.querySelector('.idea-comments-list');
+          if(listEl.dataset.loaded!=='true'){
+            listEl.dataset.loaded = 'true';
+            loadAndRenderComments(row.dataset.id, listEl);
+          }
+        }
+      });
+    });
+    wrap.querySelectorAll('.idea-comment-post').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const block = btn.closest('.idea-comments');
+        const ideaId = block.dataset.id;
+        const input = block.querySelector('.idea-comment-input');
+        const text = input.value.trim();
+        if(!text) return;
+        try{
+          const { db, collection, doc, setDoc } = window.rotaDb;
+          const commentId = 'comment_'+Date.now()+'_'+Math.random().toString(36).slice(2,7);
+          const authorName = (viewerIdentityId && state.members.find(m=>m.id===viewerIdentityId)?.name) || 'Unknown';
+          await setDoc(doc(collection(db,'ideas_log', ideaId, 'comments'), commentId), {
+            text, authorUid: currentAuthUid||null, authorName, createdAt: Date.now()
+          });
+          input.value = '';
+          const listEl = block.querySelector('.idea-comments-list');
+          listEl.dataset.loaded = 'true';
+          loadAndRenderComments(ideaId, listEl);
+        }catch(e){ console.error('Could not post comment', e); showToast('Could not post comment'); }
+      });
     });
     wrap.querySelectorAll('.idea-status-pick').forEach(sel=>{
       sel.addEventListener('change', ()=>{
@@ -2510,12 +2652,29 @@ async function renderIdeasTab(){
         });
       });
     });
+
+    // Mark any idea_submitted notifications read now that this tab's actually been opened —
+    // same pattern the schedule-notifications tab already uses, clears the sidebar badge.
+    if(viewerIdentityId){
+      try{
+        const notifs = await loadMyNotifications();
+        const unread = notifs.filter(n=> n.kind==='idea_submitted' && !n.read);
+        if(unread.length>0){
+          const { doc: fsDoc, updateDoc: fsUpdateDoc, collection: fsCollection } = window.rotaDb;
+          for(const n of unread){
+            try{ await fsUpdateDoc(fsDoc(fsCollection(db,'notifications',viewerIdentityId,'items'), n.id), { read:true }); }catch(e){}
+          }
+          updateIdeaNotifDot();
+        }
+      }catch(e){ /* non-fatal — badge just won't clear this visit */ }
+    }
   }catch(e){
     console.error('Could not load ideas/bugs', e);
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Couldn't load this list — try Refresh.</div>`;
   }
 }
 document.getElementById('btn-refresh-ideas').addEventListener('click', renderIdeasTab);
+document.getElementById('idea-show-archived').addEventListener('change', renderIdeasTab);
 document.getElementById('idea-filter-type').addEventListener('change', renderIdeasTab);
 document.getElementById('btn-toggle-idea-form').addEventListener('click', ()=>{
   const body = document.getElementById('idea-form-body');
@@ -4287,7 +4446,6 @@ async function switchTeam(teamId){
 // ================= TEAMS & PEOPLE TAB =================
 async function renderOrgTab(){
   await loadMemberContactsForAdmin();
-  renderTeamsList();
   renderTeamTab();
   await renderUnassignedList();
 }
@@ -4333,6 +4491,7 @@ async function removeTeamEntirely(teamId){
 }
 function renderTeamsList(){
   const wrap = document.getElementById('teams-list');
+  if(!wrap) return; // this section moved to Departments — safe no-op for any remaining callers
   const scopeToCurrentDept = state.departments.length > 0 && currentDepartmentId;
   const teamLeadOptions = scopeToCurrentDept
     ? (()=>{
@@ -4420,36 +4579,6 @@ function renderTeamsList(){
     });
   });
 }
-document.getElementById('btn-add-team').addEventListener('click', ()=>{
-  const id = 'team_'+Math.random().toString(36).slice(2,9);
-  const deptId = (currentDepartmentId && currentDepartmentId!=='__ungrouped__') ? currentDepartmentId : null;
-  state.teams.push({id, name:'New Team', managerId:null, departmentId:deptId});
-  state.tasksByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_TASKS));
-  state.reqByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_REQ));
-  renderTeamsList();
-  renderTeamSwitcher();
-});
-document.getElementById('btn-save-teams').addEventListener('click', async ()=>{
-  const wrap = document.getElementById('teams-list');
-  wrap.querySelectorAll('.team-row[data-ti]').forEach(row=>{
-    const ti = +row.dataset.ti;
-    const name = row.querySelector('.team-name').value.trim() || 'Untitled team';
-    const managerId = row.querySelector('.team-manager').value || null;
-    state.teams[ti] = {...state.teams[ti], name, managerId};
-  });
-  const ok = await safeSet('teams', state.teams);
-  if(ok){
-    showToast('Teams saved');
-    logAudit('team.save_all', { count: state.teams.length });
-  } else {
-    // Previously silent on failure — nothing shown at all. Surfaces the actual underlying
-    // error (safeSet already captures it into lastStorageError) so a real failure is visible
-    // and diagnosable, not indistinguishable from the button doing nothing.
-    const detail = lastStorageError ? ` (${lastStorageError.what})` : '';
-    showToast(`Couldn't save — check the banner above for details${detail}`);
-  }
-  renderTeamSwitcher();
-});
 
 // People without a team yet — the queue an admin works from to place already-invited people
 // (or anyone manually added) onto a team.
@@ -8534,6 +8663,7 @@ function setMode(mode){
     renderTeamSwitcher();
     renderScheduleTab();
     updateDepartmentsNavVisibility();
+    updateIdeaNotifDot();
   }
   restoreLastActiveTab();
 }
@@ -8676,6 +8806,13 @@ async function updateNotifRedDot(){
     }catch(e){ /* non-fatal — badge is a nice-to-have, never worth surfacing an error for */ }
   }
 }
+async function updateIdeaNotifDot(){
+  const dot = document.getElementById('idea-notif-dot');
+  if(!dot || !viewerIdentityId) return;
+  const notifs = await loadMyNotifications();
+  const unread = notifs.some(n=> n.kind==='idea_submitted' && !n.read);
+  dot.style.display = unread ? 'inline-block' : 'none';
+}
 function notifRowHtml(n){
   const time = n.createdAt ? new Date(n.createdAt).toLocaleString('en-US', {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'}) : '';
   return `<div class="notif-row ${!n.read?'unread':''}">
@@ -8723,10 +8860,12 @@ function renderViewerYourWeekSummary(sched){
   wrap.innerHTML = buildYourWeekTableHtml(sched, viewerWeekMonday, me);
   attachYourWeekClicks(wrap, '#viewer-sched-grid-wrap');
 }
-// A viewer should only ever see: tasks they're actually assigned to this week (their own
-// work), plus tasks explicitly made visible to their level (the same "Also visible to"
-// setting "Who's on" already uses) — never every task on the team unfiltered, which is what
-// the grid used to show regardless of any visibility setting.
+// For a team with Grand Schedule available, a viewer's own "My schedule" grid only shows:
+// tasks they're actually assigned to this week (their own work), plus tasks explicitly made
+// visible to their level (the same "Also visible to" setting "Who's on" already uses) — the
+// full team picture lives on the separate Grand Schedule tab instead. A team with no Grand
+// Schedule has nowhere else to see the whole picture, so drawViewerScheduleGrid skips this
+// filter entirely for them and shows every task unfiltered.
 function visibleTasksForViewer(tasks, sched, dates, viewerId){
   const me = state.members.find(m=>m.id===viewerId);
   const myLevels = (me && me.levels) || [];
@@ -8769,7 +8908,16 @@ function drawViewerScheduleGrid(sched){
     html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}${bdayNames.length?`<span class="bday-indicator" title="${escAttr(bdayNames.join(', '))}">🎂 ${escHtml(bdayNames.join(', '))}</span>`:''}</div></th>`;
   });
   html += '</tr></thead><tbody>';
-  const visibleTasks = visibleTasksForViewer(sortedTasksForDisplay(state.tasks), sched, dates, viewerIdentityId);
+  // A team without Grand Schedule has no separate tab for seeing the whole picture, so this
+  // grid carries both jobs for them — the full team schedule, unfiltered. A team with Grand
+  // Schedule keeps the filtered, own-tasks-only view here, since the full department-wide
+  // picture already lives one tab over.
+  const myTeam = state.teams.find(t=>t.id===currentTeamId);
+  const myDept = myTeam && myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
+  const hasGrand = !!(myDept && myDept.showGrandViews!==false);
+  const visibleTasks = hasGrand
+    ? visibleTasksForViewer(sortedTasksForDisplay(state.tasks), sched, dates, viewerIdentityId)
+    : sortedTasksForDisplay(state.tasks);
   visibleTasks.forEach(task=>{
     html += `<tr><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(task.name)}</span></div></td>`;
     runsFor(task.id).forEach(run=>{
@@ -8823,22 +8971,12 @@ async function renderViewerGrandScheduleTab(){
     });
   });
 
-  // A task-group is visible to this viewer if they're assigned to it (on any team it appears
-  // on) this week, or it's marked visible to their level on any of those teams — same rule as
-  // My Schedule, just evaluated once per merged group rather than per team.
-  const myLevels = (me && me.levels) || [];
-  const visibleKeys = Object.keys(groups).filter(key=>{
-    const g = groups[key];
-    return g.perTeam.some(({team, task})=>{
-      const sched = scheds[team.id];
-      const assignedThisWeek = dates.some(d=> ((sched[d]||{})[task.id]||[]).includes(viewerIdentityId));
-      const visibleByLevel = task.visibleToLevels && task.visibleToLevels.some(l=>myLevels.includes(l));
-      return assignedThisWeek || visibleByLevel;
-    });
-  }).sort();
+  // Grand Schedule shows the whole department-wide picture, unfiltered — this is where a
+  // viewer actually sees who's working what across every team, not a personal, narrowed view.
+  const allKeys = Object.keys(groups).sort();
 
-  if(visibleKeys.length===0){
-    wrap.innerHTML = `<div class="card"><div class="muted" style="padding:14px 2px; font-size:12.5px;">Nothing you're assigned to or able to see this week.</div></div>`;
+  if(allKeys.length===0){
+    wrap.innerHTML = `<div class="card"><div class="muted" style="padding:14px 2px; font-size:12.5px;">Nothing scheduled this week.</div></div>`;
     return;
   }
 
@@ -8850,7 +8988,7 @@ async function renderViewerGrandScheduleTab(){
     html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}</div></th>`;
   });
   html += '</tr></thead><tbody>';
-  visibleKeys.forEach(key=>{
+  allKeys.forEach(key=>{
     const g = groups[key];
     html += viewerGrandTaskRowHtml(g, scheds, dates, scopeIds);
   });
