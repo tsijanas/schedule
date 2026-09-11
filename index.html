@@ -84,6 +84,18 @@
   .nav-item.active{ opacity:1; background:rgba(237,255,233,0.16); }
   .sidebar-foot{ margin-top:auto; padding:10px 12px; font-size:11.5px; opacity:0.5; line-height:1.5; }
   .sidebar-section-label{ padding:4px 12px 6px 12px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--sidebar-ink); opacity:0.55; }
+  .mode-admin .team-section{ border:1px solid var(--gold); border-radius:14px; padding-bottom:4px; }
+  .team-section-label{ color:var(--gold); opacity:1; padding-top:12px; }
+  .nav-submenu-toggle{
+    display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%;
+    padding:10px 12px; border-radius:10px; color:var(--sidebar-ink); opacity:0.72;
+    background:none; border:none; text-align:left; font-size:13.5px; font-weight:500; cursor:pointer;
+  }
+  .nav-submenu-toggle:hover{ opacity:1; background:rgba(237,255,233,0.08); }
+  .nav-submenu-arrow{ opacity:0.6; font-size:10px; transition:transform 0.15s; flex-shrink:0; }
+  .nav-submenu-toggle[aria-expanded="true"] .nav-submenu-arrow{ transform:rotate(180deg); }
+  .nav-submenu{ padding-left:10px; }
+  .idea-notif-dot{ display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--brick); margin-left:6px; vertical-align:middle; }
   .team-switcher{ padding:2px 8px 4px 8px; }
   .team-switcher label{ display:block; font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--sidebar-ink); opacity:0.6; margin-bottom:5px; }
   .team-switcher select, .team-switcher .fsel-trigger{ width:100%; font-size:13px; font-weight:600; padding:7px 9px; }
@@ -619,25 +631,34 @@
       </div>
     </div>
 
-    <div class="sidebar-panel admin-only" id="departments-nav-box" style="display:none;">
-      <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
-    </div>
-
     <div class="sidebar-panel admin-only" id="grand-nav-box" style="display:none;">
       <div class="sidebar-section-label">Department-wide</div>
-      <button class="nav-item admin-only" data-tab="grand" id="nav-grand">Grand Schedule</button>
-      <button class="nav-item admin-only" data-tab="grand-tasks" id="nav-grand-tasks">Grand Tasks</button>
-      <button class="nav-item admin-only" data-tab="grand-req" id="nav-grand-req">Grand Requirement</button>
-      <button class="nav-item admin-only" data-tab="grand-balance" id="nav-grand-balance">Grand Rotation Balance</button>
-      <button class="nav-item admin-only" data-tab="grand-registry" id="nav-grand-registry">Grand Registry</button>
+      <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
+      <button class="nav-item admin-only" data-tab="grand-tasks" id="nav-grand-tasks">Tasks</button>
+      <button class="nav-item admin-only" data-tab="grand-req" id="nav-grand-req">Requirement</button>
+      <button class="nav-item admin-only" data-tab="grand" id="nav-grand">Schedule</button>
+      <button type="button" class="admin-only nav-submenu-toggle" id="toggle-dept-insights" aria-expanded="false">
+        Insights<span class="nav-submenu-arrow">▾</span>
+      </button>
+      <div class="nav-submenu" id="submenu-dept-insights" style="display:none;">
+        <button class="nav-item admin-only" data-tab="grand-balance" id="nav-grand-balance">Rotation Balance</button>
+        <button class="nav-item admin-only" data-tab="grand-registry" id="nav-grand-registry">Registry</button>
+      </div>
     </div>
 
-    <div class="sidebar-panel">
-      <button class="nav-item admin-only active" data-tab="schedule">Schedule</button>
-      <button class="nav-item admin-only" data-tab="org">Teams &amp; People</button>
-      <button class="nav-item admin-only" data-tab="tasks">Tasks</button>
+    <div class="sidebar-panel team-section">
+      <div class="sidebar-section-label team-section-label admin-only">Team</div>
+      <button class="nav-item admin-only active" data-tab="tasks">Tasks</button>
       <button class="nav-item admin-only" data-tab="requirements">Requirement</button>
+      <button class="nav-item admin-only" data-tab="org">Teams &amp; People</button>
+      <button class="nav-item admin-only" data-tab="schedule">Schedule</button>
       <button class="nav-item admin-only" data-tab="holidays">Holidays</button>
+      <button type="button" class="admin-only nav-submenu-toggle" id="toggle-team-insights" aria-expanded="false">
+        Team Insights<span class="nav-submenu-arrow">▾</span>
+      </button>
+      <div class="nav-submenu" id="submenu-team-insights" style="display:none;">
+        <button class="nav-item admin-only" data-tab="balance">Rotation Balance</button>
+      </div>
 
       <button class="nav-item viewer-only" data-tab="notifications">Notifications<span class="notif-red-dot" id="notif-red-dot" style="display:none;"></span></button>
       <button class="nav-item viewer-only active" data-tab="myschedule">My schedule</button>
@@ -646,9 +667,8 @@
       <button class="nav-item viewer-only" data-tab="whoson" id="nav-whoson" style="display:none;">Who's on</button>
     </div>
 
-    <div class="sidebar-panel admin-only">
-      <button class="nav-item admin-only" data-tab="balance">Rotation balance</button>
-      <button class="nav-item admin-only" data-tab="ideas">Ideas &amp; Bugs</button>
+    <div class="sidebar-panel">
+      <button class="nav-item" data-tab="ideas">Ideas &amp; Bugs<span class="idea-notif-dot" id="idea-notif-dot" style="display:none;"></span></button>
       <button class="nav-item admin-only" data-tab="data">Data</button>
       <div class="sidebar-foot admin-only">Autosaves to the cloud when that's available — check the Data tab to back up or move your data manually otherwise.</div>
     </div>
@@ -2913,12 +2933,26 @@ function undoLast(){
 }
 
 // ---------- tabs ----------
+document.querySelectorAll('.nav-submenu-toggle').forEach(toggle=>{
+  toggle.addEventListener('click', ()=>{
+    const submenu = toggle.nextElementSibling;
+    const isOpen = toggle.getAttribute('aria-expanded') === 'true';
+    toggle.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+    submenu.style.display = isOpen ? 'none' : 'block';
+  });
+});
 document.querySelectorAll('.nav-item').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     localStorage.setItem('lastActiveTab', btn.dataset.tab);
     document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
     document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
     btn.classList.add('active');
+    const parentSubmenu = btn.closest('.nav-submenu');
+    if(parentSubmenu && parentSubmenu.style.display==='none'){
+      parentSubmenu.style.display = 'block';
+      const relatedToggle = parentSubmenu.previousElementSibling;
+      if(relatedToggle && relatedToggle.classList.contains('nav-submenu-toggle')) relatedToggle.setAttribute('aria-expanded','true');
+    }
     document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
     if(btn.dataset.tab==='org') renderOrgTab();
     if(btn.dataset.tab==='tasks') renderTasksTab();
@@ -4578,32 +4612,53 @@ function wireMsDropdowns(wrap){
 function renderTasksTab(){
   renderTaskPoolCard();
   const wrap = document.getElementById('tasks-list');
+  const myTeam = state.teams.find(t=>t.id===currentTeamId);
+  const myDept = myTeam && myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
+  const grandOn = !!(myDept && myDept.showGrandViews!==false);
+  const grandGroups = grandOn ? grandTaskGroups(myDept.id) : {};
   let html='';
   state.tasks.forEach((t,ti)=>{
     const levelSummary = (t.levels&&t.levels.length) ? t.levels.map(l=>`<span class="task-lvl-tag">${escHtml(l)}</span>`).join('') : `<span class="muted" style="font-size:11px;">Open to all levels</span>`;
     const sameWeekBadge = t.sameAllWeek ? `<span class="task-lvl-tag" style="background:var(--gold-soft);">Same all week</span>` : '';
     const sharedCount = t.sharedTaskId ? state.teams.filter(team=> team.id!==currentTeamId && (state.tasksByTeam[team.id]||[]).some(t2=>t2.sharedTaskId===t.sharedTaskId)).length : 0;
     const sharedBadge = sharedCount>0 ? `<span class="task-lvl-tag" style="background:var(--sage-soft);" title="Name, levels, same-week, and visibility stay in sync across linked teams — notes and exclusions stay local to each team">🔗 Linked with ${sharedCount} other team${sharedCount===1?'':'s'}</span>` : '';
+    // Grand sharing is independent of the older sharedTaskId link above — it's purely by
+    // matching task name within a department that has Grand Schedule turned on, which is what
+    // the Grand Tasks tab itself already groups by.
+    const grandKey = (t.name||'').trim().toLowerCase();
+    const grandGroup = grandOn ? grandGroups[grandKey] : null;
+    const isGrandShared = !!(grandGroup && grandGroup.perTeam.length>1);
+    // Missing/undefined defaults to true (overridden/independent) — deliberately, so nothing
+    // that existed before this feature silently starts following Grand Tasks without someone
+    // actually choosing that.
+    const isOverridden = t.grandOverride !== false;
+    const locked = isGrandShared && !isOverridden;
     html += `<div class="task-card" data-ti="${ti}">
       <div class="task-card-head">
         <input type="checkbox" class="card-select-check" data-ti="${ti}">
         <button class="card-expand-toggle" title="Expand">${chevronSvg}</button>
         <span class="drag-handle" draggable="true" title="Drag to reorder">⠿</span>
-        <input type="text" class="task-name" value="${escAttr(t.name)}" placeholder="Task name">
+        <input type="text" class="task-name" value="${escAttr(t.name)}" placeholder="Task name" ${locked?'readonly':''}>
         <div class="task-card-summary">${levelSummary}${sameWeekBadge}${sharedBadge}</div>
+        ${isGrandShared ? `<label style="display:flex; align-items:center; gap:5px; font-size:11.5px; white-space:nowrap; margin-left:8px; flex-shrink:0;">
+          <input type="checkbox" class="grand-override-check" data-ti="${ti}" ${isOverridden?'checked':''}> Override
+        </label>` : `<label style="display:flex; align-items:center; gap:5px; font-size:11.5px; white-space:nowrap; margin-left:8px; flex-shrink:0;">
+          <input type="checkbox" class="show-in-grand-check" data-ti="${ti}" ${t.showInGrand!==false?'checked':''}> Show in Grand Schedule
+        </label>`}
         <div class="row-actions">
           <button class="btn-remove-x btn-del-task" title="Remove">×</button>
         </div>
       </div>
       <div class="task-card-body">
-      <div class="task-card-grid">
+      ${locked ? `<div class="muted" style="font-size:11px; background:var(--gold-soft); border-radius:8px; padding:7px 11px; margin-bottom:10px;">🔒 Set from Grand Tasks — shared with ${grandGroup.perTeam.length-1} other team${grandGroup.perTeam.length-1===1?'':'s'}. Check "Override" above to edit just this team's copy.</div>` : ''}
+      <div class="task-card-grid" ${locked?'style="opacity:0.55; pointer-events:none;"':''}>
         <div class="field">
           <label>Restricted to</label>
-          <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="lvl-check" data-lvl="${l}" ${t.levels&&t.levels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
+          <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="lvl-check" data-lvl="${l}" ${t.levels&&t.levels.includes(l)?'checked':''} ${locked?'disabled':''}> ${l}</label>`).join('')}</div>
         </div>
         <div class="field">
           <label>Also visible to</label>
-          <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="visible-lvl-check" data-lvl="${l}" ${t.visibleToLevels&&t.visibleToLevels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
+          <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="visible-lvl-check" data-lvl="${l}" ${t.visibleToLevels&&t.visibleToLevels.includes(l)?'checked':''} ${locked?'disabled':''}> ${l}</label>`).join('')}</div>
           <div class="muted" style="font-size:10.5px; margin-top:4px;">Visible department-wide to this level, schedulable or not. Admin/Manager always see everything.</div>
         </div>
         <div class="field">
@@ -4628,7 +4683,7 @@ function renderTasksTab(){
         <div class="field">
           <label>Scheduling</label>
           <label class="same-week-toggle" title="The scheduler picks one person to cover every day this task is needed that week, instead of choosing separately per day.">
-            <input type="checkbox" class="same-week-check" ${t.sameAllWeek?'checked':''}> Same all week
+            <input type="checkbox" class="same-week-check" ${t.sameAllWeek?'checked':''} ${locked?'disabled':''}> Same all week
           </label>
         </div>
       </div>
@@ -4648,6 +4703,12 @@ function renderTasksTab(){
   wrap.querySelectorAll('.card-expand-toggle').forEach(btn=>{
     btn.addEventListener('click', ()=> btn.closest('.task-card').classList.toggle('expanded'));
   });
+  wrap.querySelectorAll('.grand-override-check').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      state.tasks[+cb.dataset.ti].grandOverride = cb.checked;
+      renderTasksTab();
+    });
+  });
 
   function readTaskCard(card){
     const ti = +card.dataset.ti;
@@ -4658,7 +4719,12 @@ function renderTasksTab(){
     const combineWith = Array.from(card.querySelectorAll('.combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const sameAllWeek = card.querySelector('.same-week-check').checked;
     const notes = card.querySelector('.task-notes').value;
-    return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, sameAllWeek, notes } };
+    const overrideCb = card.querySelector('.grand-override-check');
+    const showInGrandCb = card.querySelector('.show-in-grand-check');
+    const extra = {};
+    if(overrideCb) extra.grandOverride = overrideCb.checked;
+    if(showInGrandCb) extra.showInGrand = showInGrandCb.checked;
+    return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, sameAllWeek, notes, ...extra } };
   }
   function updateDeleteSelectedTasksState(){
     const checked = wrap.querySelectorAll('.card-select-check:checked').length;
@@ -5244,6 +5310,13 @@ function grandTaskGroups(deptId){
       groups[key].perTeam.push({ team, task });
     });
   });
+  // A team-specific task (not actually shared with any other team) can be opted out of Grand
+  // Schedule entirely via its own "Show in Grand Schedule" checkbox — a genuinely shared task
+  // is never affected by this, since it's inherently relevant to more than one team regardless.
+  Object.keys(groups).forEach(key=>{
+    const g = groups[key];
+    if(g.perTeam.length===1 && g.perTeam[0].task.showInGrand===false) delete groups[key];
+  });
   return groups;
 }
 let grandReqTotals = {}; // loaded from storage for the current department — the actual fix for the reset-to-0 bug
@@ -5535,6 +5608,34 @@ function renderGrandTaskSettingsPanel(g, panel){
   // linked — the first team's values are shown as a starting point; saving overwrites all of
   // them with whatever's set here, same as any other "apply to all" action in this app.
   const sample = g.perTeam[0].task;
+  const sampleTeamId = g.perTeam[0].team.id;
+  const overriddenCount = g.perTeam.filter(pt=>pt.task.grandOverride===true).length;
+  // The union of every distinct task name across every team in this group — what an admin can
+  // actually pick from here, since "combine with X" only means something if at least one team
+  // in this group genuinely has a task called X.
+  const nameSet = new Map(); // lowercased name -> display name
+  g.perTeam.forEach(({team})=>{
+    (state.tasksByTeam[team.id]||[]).forEach(t=>{
+      const key = (t.name||'').trim().toLowerCase();
+      if(key && key!==(g.displayName||'').trim().toLowerCase()) nameSet.set(key, t.name);
+    });
+  });
+  const nameOptions = Array.from(nameSet.entries()).map(([key,name])=>({id:key, name}));
+  // Resolve the sample team's own excludes/combineWith (stored as that team's own task ids)
+  // back into names, so the dropdown shows something meaningful regardless of which team's
+  // copy happens to be used as the starting point.
+  function idsToNames(ids, teamId){
+    const teamTasks = state.tasksByTeam[teamId] || [];
+    return (ids||[]).map(id=>{
+      const t = teamTasks.find(x=>x.id===id);
+      return t ? (t.name||'').trim().toLowerCase() : null;
+    }).filter(Boolean);
+  }
+  const sampleExcludesArr = Array.isArray(sample.excludes) ? sample.excludes : (sample.excludes ? [sample.excludes] : []);
+  const sampleCombineArr = Array.isArray(sample.combineWith) ? sample.combineWith : (sample.combineWith ? [sample.combineWith] : []);
+  const excludesNames = idsToNames(sampleExcludesArr, sampleTeamId);
+  const combineNames = idsToNames(sampleCombineArr, sampleTeamId);
+
   panel.innerHTML = `
     <div class="task-card-grid" style="padding:0 4px;">
       <div class="field">
@@ -5546,26 +5647,62 @@ function renderGrandTaskSettingsPanel(g, panel){
         <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="grand-task-visible-check" data-lvl="${l}" ${sample.visibleToLevels&&sample.visibleToLevels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
       </div>
       <div class="field">
+        <label>Cannot combine with</label>
+        ${multiSelectDropdownHtml('grand-task-exclude-select', nameOptions, excludesNames)}
+        <div class="muted" style="font-size:10px; margin-top:3px;">By task name — applied to whichever team actually has a matching task.</div>
+      </div>
+      <div class="field">
+        <label>Combine with</label>
+        ${multiSelectDropdownHtml('grand-task-combine-select', nameOptions, combineNames)}
+        <div class="muted" style="font-size:10px; margin-top:3px;">Same — by name, resolved per team.</div>
+      </div>
+      <div class="field">
         <label>Scheduling</label>
         <label class="same-week-toggle"><input type="checkbox" class="grand-task-same-week-check" ${sample.sameAllWeek?'checked':''}> Same all week</label>
       </div>
     </div>
-    <div class="muted" style="font-size:11px; margin:8px 4px 0;">Applies to all ${g.perTeam.length} team${g.perTeam.length===1?'':'s'} sharing this name. Notes/exclusions stay local.</div>
+    <div class="muted" style="font-size:11px; margin:8px 4px 0;">Applies to all ${g.perTeam.length} team${g.perTeam.length===1?'':'s'} sharing this name.${overriddenCount>0?` ${overriddenCount} team${overriddenCount===1?' has':'s have'} "Override" checked and ${overriddenCount===1?'is':'are'} skipped — unaffected by saving here.`:''}</div>
+    <div class="grand-task-save-warning muted" style="font-size:11px; margin:6px 4px 0; display:none; background:var(--gold-soft); border-radius:8px; padding:7px 11px;"></div>
     <div class="row" style="margin-top:10px; padding:0 4px;"><div class="spacer"></div><button type="button" class="btn small btn-save-grand-task-settings">Save to all teams</button></div>
   `;
+  wireMsDropdowns(panel);
   panel.querySelector('.btn-save-grand-task-settings').addEventListener('click', async ()=>{
     const levels = Array.from(panel.querySelectorAll('.grand-task-lvl-check:checked')).map(c=>c.dataset.lvl);
     const visibleToLevels = Array.from(panel.querySelectorAll('.grand-task-visible-check:checked')).map(c=>c.dataset.lvl);
     const sameAllWeek = panel.querySelector('.grand-task-same-week-check').checked;
+    const excludeNamesSelected = Array.from(panel.querySelectorAll('.grand-task-exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+    const combineNamesSelected = Array.from(panel.querySelectorAll('.grand-task-combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const touchedTeamIds = new Set();
+    const unresolved = []; // { teamName, taskName } — a selected name that didn't exist on this team
     for(const {team, task} of g.perTeam){
+      if(task.grandOverride===true) continue; // this team's copy stays fully independent
+      const teamTasks = state.tasksByTeam[team.id] || [];
+      function resolveNames(names){
+        const ids = [];
+        names.forEach(nameKey=>{
+          const match = teamTasks.find(t=> t.id!==task.id && (t.name||'').trim().toLowerCase()===nameKey);
+          if(match) ids.push(match.id);
+          else unresolved.push({ teamName: team.name, taskName: nameSet.get(nameKey) || nameKey });
+        });
+        return ids;
+      }
       task.levels = [...levels];
       task.visibleToLevels = [...visibleToLevels];
       task.sameAllWeek = sameAllWeek;
+      task.excludes = resolveNames(excludeNamesSelected);
+      task.combineWith = resolveNames(combineNamesSelected);
       await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
       touchedTeamIds.add(team.id);
     }
     logAudit('task.grand_settings_save', { name: g.displayName, teams: touchedTeamIds.size });
+    const warnEl = panel.querySelector('.grand-task-save-warning');
+    if(unresolved.length>0){
+      const lines = unresolved.map(u=>`${escHtml(u.teamName)} has no task named "${escHtml(u.taskName)}"`);
+      warnEl.innerHTML = `⚠ Saved, but ${unresolved.length} pairing${unresolved.length===1?'':'s'} couldn't apply — ${lines.join('; ')}. Everything else saved normally.`;
+      warnEl.style.display = 'block';
+    } else {
+      warnEl.style.display = 'none';
+    }
     showToast(`Saved to ${touchedTeamIds.size} team${touchedTeamIds.size===1?'':'s'}`);
     if(touchedTeamIds.has(currentTeamId)){ renderTasksTab(); renderReqTab(); }
   });
@@ -8453,11 +8590,11 @@ function updateWhosOnNavVisibility(){
 // UI generally, but never department creation/editing, so this needs its own runtime check
 // rather than just the existing admin-only CSS class (which doesn't distinguish the two roles).
 function updateDepartmentsNavVisibility(){
-  const panel = document.getElementById('departments-nav-box');
-  if(!panel) return;
+  const btn = document.getElementById('nav-departments');
+  if(!btn) return;
   const me = currentViewerMember();
   const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
-  panel.style.display = isOrgAdmin ? '' : 'none';
+  btn.style.display = isOrgAdmin ? '' : 'none';
 }
 let whosOnWeekMonday = null;
 async function renderWhosOnTab(){
