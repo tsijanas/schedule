@@ -514,6 +514,44 @@
   .fsel-opt.active{ background:rgba(0,0,0,0.09); }
   .fsel-opt:disabled{ opacity:0.45; cursor:default; }
   .team-row{ display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  /* ---- Tasks grid ----
+     Same idea as the People grid: a row per task, a column per setting, the name column
+     pinned so you can still tell which task a cell belongs to once the grid scrolls. */
+  .grid-table{ border-collapse:separate; border-spacing:0; font-size:12.5px; width:max-content; min-width:100%; }
+  .grid-table th, .grid-table td{ padding:6px 7px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .grid-table thead th{
+    position:sticky; top:0; z-index:3; background:var(--paper); text-align:left;
+    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em;
+    color:var(--ink-soft); border-bottom:1.5px solid var(--line); white-space:nowrap;
+  }
+  .grid-table tbody tr:nth-child(even){ background:rgba(0,0,0,0.015); }
+  .grid-table tbody tr:hover{ background:var(--gold-soft); }
+  .grid-table tbody tr.grid-row-locked{ background:var(--gold-soft); }
+  .grid-table tbody tr.dragging{ opacity:0.45; }
+  .grid-table tbody tr.drag-over td{ box-shadow:inset 0 2px 0 var(--gold); }
+  .tasks-table .gt-sel{ width:26px; }
+  .tasks-table .gt-name{
+    position:sticky; left:0; z-index:2; background:var(--paper);
+    min-width:210px; box-shadow:1px 0 0 var(--line);
+  }
+  .tasks-table thead .gt-name{ z-index:4; }
+  .tasks-table tbody tr:hover .gt-name, .tasks-table tbody tr.grid-row-locked .gt-name{ background:var(--gold-soft); }
+  .tasks-table .gt-name-line{ display:flex; align-items:center; gap:5px; }
+  .tasks-table .gt-name .task-name{ flex:1; min-width:0; border:1px solid transparent; background:none; font-weight:600; padding:3px 5px; }
+  .tasks-table .gt-name .task-name:hover, .tasks-table .gt-name .task-name:focus{ border-color:var(--line); background:#fff; }
+  .tasks-table .gt-levels{ min-width:130px; }
+  .tasks-table .gt-ms{ min-width:150px; }
+  .tasks-table .gt-flag{ width:74px; text-align:center; }
+  .tasks-table .gt-flag-label{ display:inline-flex; align-items:center; gap:4px; font-size:11px; white-space:nowrap; }
+  .tasks-table .gt-notes{ min-width:180px; }
+  .tasks-table .gt-notes input{ width:100%; font-size:12px; padding:4px 6px; }
+  .tasks-table .gt-actions{ white-space:nowrap; text-align:right; }
+  .tasks-table .gt-hint{ font-size:10px; margin-top:2px; line-height:1.3; }
+  .tasks-table .gt-hint:empty{ display:none; }
+  .tasks-table .drag-handle{ cursor:grab; color:var(--ink-faint); font-size:13px; }
+  /* A locked row follows Grand Tasks — its dropdowns stay readable but can't be opened. */
+  .ms-dropdown.ms-locked{ opacity:0.6; pointer-events:none; }
+
   /* ---- People grid ----
      A spreadsheet rather than a stack of cards: one row per person, one column per setting,
      so a whole team can be adjusted down a column. The name column is pinned so you never
@@ -813,11 +851,6 @@
         <h3>Unassigned <span class="muted" style="font-weight:400; font-size:12px;">— people who exist but aren't on a team yet, ready for you to place them.</span></h3>
         <div id="unassigned-list"></div>
       </div>
-      <div class="card" style="overflow-x:auto;">
-        <h3>Standard tasks by level</h3>
-        <div class="hint">What's normally open to each level on this team — the same setting each task's own Level picker uses in Tasks, just organized by level instead of by task, since that's usually the more useful direction to think in. New people start eligible for whatever's checked here for their level; every person's own Eligible Tasks stays individually editable afterward regardless of what's set here.</div>
-        <div id="level-tasks-wrap"></div>
-      </div>
       <div class="card" id="invites-card" style="display:none;">
         <h3>Waiting to join <span class="muted" style="font-weight:400; font-size:12px;" id="invites-team-label"></span></h3>
         <div class="hint">People who have an email on file for this team but haven't created their account yet. Send them the join link above, or a personal one from here.</div>
@@ -850,7 +883,13 @@
           <button class="btn-remove-x-wide" id="btn-delete-selected-tasks" disabled>Delete selected (0)</button>
           <button class="btn small" id="btn-save-all-tasks">Save changes</button>
         </div>
-        <div id="tasks-list"></div>
+        <div class="people-table-scroll" id="tasks-list"></div>
+        <div class="muted" style="font-size:11.5px; margin-top:10px;">Edit straight in the grid, then <strong>Save changes</strong> — one button saves every row at once.</div>
+      </div>
+      <div class="card" style="overflow-x:auto;">
+        <h3>Standard tasks by level</h3>
+        <div class="hint">The same <strong>Restricted to</strong> setting as the grid above, turned on its side — by level instead of by task, which is usually the more useful direction to think in. Ticking here changes who can be scheduled for a task, not just who's invited: it saves immediately and applies to everyone, now and later. It also decides what a newly added person starts out eligible for; each person's own ticks on People stay editable afterward regardless.</div>
+        <div id="level-tasks-wrap"></div>
       </div>
     </div>
 
@@ -958,8 +997,14 @@
       </div>
       <div class="card">
         <h3>Shared across this department</h3>
-        <div class="hint">Task names that already exist on more than one team here — each still an independent copy per team (unless linked), same as anywhere else in the app.</div>
-        <div id="grand-tasks-list"></div>
+        <div class="hint">Task names that already exist on more than one team here — each still an independent copy per team (unless linked), same as anywhere else in the app. Editing a row applies to every team that hasn't ticked <strong>Override</strong> for that task.</div>
+        <div class="row" style="margin-bottom:10px;">
+          <div class="spacer"></div>
+          <button class="btn small" id="btn-save-all-grand-tasks">Save changes</button>
+        </div>
+        <div class="people-table-scroll" id="grand-tasks-list"></div>
+        <div class="muted" id="grand-tasks-warning" style="font-size:11px; margin-top:10px; background:var(--gold-soft); border-radius:8px; padding:7px 11px; display:none;"></div>
+        <div class="muted" style="font-size:11.5px; margin-top:10px;">Edit straight in the grid, then <strong>Save changes</strong> — one button pushes every row to every team. Pairings are matched by task name, so they apply to whichever team actually has a task by that name.</div>
       </div>
     </div>
 
@@ -3847,7 +3892,6 @@ function teamOptionsForDept(deptId, selectedTeamId){
 }
 function renderTeamTab(){
   renderInvitesCard();
-  renderStandardTasksByLevelCard();
   const me = currentViewerMember();
   const deptHint = document.getElementById('team-dept-hint');
   const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
@@ -3898,7 +3942,7 @@ function renderTeamTab(){
     <th class="pt-email">Email</th>
     <th class="pt-role">Role</th>
     <th class="pt-bday">Birthday</th>
-    ${tasks.map(t=>`<th class="pt-task" title="${escAttr(t.name)}"><span>${escHtml(t.name)}</span></th>`).join('')}
+    ${tasks.map(t=>`<th class="pt-task" data-task="${escAttr(t.id)}" title="${escAttr(t.name)}"><span>${escHtml(t.name)}</span></th>`).join('')}
     <th class="pt-actions"></th>
   </tr></thead><tbody>`;
 
@@ -3952,7 +3996,7 @@ function renderTeamTab(){
       </td>
       ${tasks.map(t=>{
         const on = !!m.eligibility[t.id];
-        return `<td class="pt-task-cell"><span class="checkbox ${on?'checked':''}" data-task="${t.id}" role="checkbox" aria-checked="${on}" tabindex="0" title="${escAttr(t.name)}">${checkSvg}</span></td>`;
+        return `<td class="pt-task-cell" data-task="${escAttr(t.id)}"><span class="checkbox ${on?'checked':''}" data-task="${t.id}" role="checkbox" aria-checked="${on}" tabindex="0" title="${escAttr(t.name)}">${checkSvg}</span></td>`;
       }).join('')}
       <td class="pt-actions">
         ${pendingInvite ? `<button type="button" class="btn-icon btn-copy-invite" data-mid="${m.id}" title="Copy this person's invite link">🔗</button><button type="button" class="btn-icon btn-email-invite" data-mid="${m.id}" title="Email this person their invite">✉</button>` : ''}
@@ -4989,20 +5033,43 @@ function wireMsDropdowns(wrap){
 }
 function renderTasksTab(){
   renderTaskPoolCard();
+  renderStandardTasksByLevelCard();
   const wrap = document.getElementById('tasks-list');
   const myTeam = state.teams.find(t=>t.id===currentTeamId);
   const myDept = myTeam && myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
   const grandOn = !!(myDept && myDept.showGrandViews!==false);
   const grandGroups = grandOn ? grandTaskGroups(myDept.id) : {};
-  let html='';
+  if(state.tasks.length===0){
+    wrap.innerHTML = `<div class="muted" style="padding:16px 2px;">No tasks on this team yet — add one above.</div>`;
+    return;
+  }
+  const anyLocked = state.tasks.some(t=>{
+    const g = grandOn ? grandGroups[(t.name||'').trim().toLowerCase()] : null;
+    return !!(g && g.perTeam.length>1) && t.grandOverride === false;
+  });
+  // Same grid shape as People: a row per task, a column per setting, so the whole team's rules
+  // can be read down a column instead of expanding one card at a time.
+  let html = '';
+  if(anyLocked){
+    html += `<div class="muted" style="font-size:11.5px; background:var(--gold-soft); border-radius:8px; padding:8px 11px; margin-bottom:12px;">🔒 Rows marked with a lock are set from Grand Tasks and shared with the other teams in ${escHtml(myDept.name)}. Tick <strong>Override</strong> on a row to edit just this team's copy.</div>`;
+  }
+  html += `<table class="grid-table tasks-table"><thead><tr>
+    <th class="gt-sel"></th>
+    <th class="gt-name">Task</th>
+    <th class="gt-levels" title="Only these levels can be scheduled for it. None ticked = open to all levels.">Restricted to</th>
+    <th class="gt-levels" title="Visible department-wide to these levels, schedulable or not. Admin and Manager always see everything.">Also visible to</th>
+    <th class="gt-ms" title="Never assigned to the same person on the same day as these">Cannot combine with</th>
+    <th class="gt-ms" title="Assigns 1 additional task from these">Combine with</th>
+    <th class="gt-flag" title="The scheduler picks one person to cover every day this task is needed that week">Same all week</th>
+    <th class="gt-flag">Grand</th>
+    <th class="gt-notes">Notes / conditions</th>
+    <th class="gt-actions"></th>
+  </tr></thead><tbody>`;
+
   state.tasks.forEach((t,ti)=>{
-    const levelSummary = (t.levels&&t.levels.length) ? t.levels.map(l=>`<span class="task-lvl-tag">${escHtml(l)}</span>`).join('') : `<span class="muted" style="font-size:11px;">Open to all levels</span>`;
-    const sameWeekBadge = t.sameAllWeek ? `<span class="task-lvl-tag" style="background:var(--gold-soft);">Same all week</span>` : '';
     const sharedCount = t.sharedTaskId ? state.teams.filter(team=> team.id!==currentTeamId && (state.tasksByTeam[team.id]||[]).some(t2=>t2.sharedTaskId===t.sharedTaskId)).length : 0;
-    const sharedBadge = sharedCount>0 ? `<span class="task-lvl-tag" style="background:var(--sage-soft);" title="Name, levels, same-week, and visibility stay in sync across linked teams — notes and exclusions stay local to each team">🔗 Linked with ${sharedCount} other team${sharedCount===1?'':'s'}</span>` : '';
-    // Grand sharing is independent of the older sharedTaskId link above — it's purely by
-    // matching task name within a department that has Grand Schedule turned on, which is what
-    // the Grand Tasks tab itself already groups by.
+    // Grand sharing is independent of the older sharedTaskId link — it's purely by matching
+    // task name within a department that has Grand Schedule turned on.
     const grandKey = (t.name||'').trim().toLowerCase();
     const grandGroup = grandOn ? grandGroups[grandKey] : null;
     const isGrandShared = !!(grandGroup && grandGroup.perTeam.length>1);
@@ -5011,75 +5078,45 @@ function renderTasksTab(){
     // actually choosing that.
     const isOverridden = t.grandOverride !== false;
     const locked = isGrandShared && !isOverridden;
-    html += `<div class="task-card" data-ti="${ti}">
-      <div class="task-card-head">
-        <input type="checkbox" class="card-select-check" data-ti="${ti}">
-        <button class="card-expand-toggle" title="Expand">${chevronSvg}</button>
-        <span class="drag-handle" draggable="true" title="Drag to reorder">⠿</span>
-        <input type="text" class="task-name" value="${escAttr(t.name)}" placeholder="Task name" ${locked?'readonly':''}>
-        <div class="task-card-summary">${levelSummary}${sameWeekBadge}${sharedBadge}</div>
-        ${isGrandShared ? `<label style="display:flex; align-items:center; gap:5px; font-size:11.5px; white-space:nowrap; margin-left:8px; flex-shrink:0;">
-          <input type="checkbox" class="grand-override-check" data-ti="${ti}" ${isOverridden?'checked':''}> Override
-        </label>` : `<label style="display:flex; align-items:center; gap:5px; font-size:11.5px; white-space:nowrap; margin-left:8px; flex-shrink:0;">
-          <input type="checkbox" class="show-in-grand-check" data-ti="${ti}" ${t.showInGrand!==false?'checked':''}> Show in Grand Schedule
-        </label>`}
-        <div class="row-actions">
-          <button class="btn-remove-x btn-del-task" title="Remove">×</button>
+    const otherTasks = state.tasks.filter(o=>o.id!==t.id).map(o=>({id:o.id, name:o.name}));
+    const excludesArr = Array.isArray(t.excludes) ? t.excludes : (t.excludes ? [t.excludes] : []);
+    const combineArr = Array.isArray(t.combineWith) ? t.combineWith
+      : t.combineWith==='__rotational__' ? otherTasks.map(o=>o.id)
+      : t.combineWith ? [t.combineWith] : [];
+    const lockedAttr = locked ? 'disabled' : '';
+    html += `<tr class="task-card ${locked?'grid-row-locked':''}" data-ti="${ti}">
+      <td class="gt-sel"><input type="checkbox" class="card-select-check" data-ti="${ti}"></td>
+      <td class="gt-name">
+        <div class="gt-name-line">
+          <span class="drag-handle" draggable="true" title="Drag to reorder">⠿</span>
+          ${locked?'<span title="Set from Grand Tasks">🔒</span>':''}
+          <input type="text" class="task-name" value="${escAttr(t.name)}" placeholder="Task name" ${locked?'readonly':''}>
         </div>
-      </div>
-      <div class="task-card-body">
-      ${locked ? `<div class="muted" style="font-size:11px; background:var(--gold-soft); border-radius:8px; padding:7px 11px; margin-bottom:10px;">🔒 Set from Grand Tasks — shared with ${grandGroup.perTeam.length-1} other team${grandGroup.perTeam.length-1===1?'':'s'}. Check "Override" above to edit just this team's copy.</div>` : ''}
-      <div class="task-card-grid" ${locked?'style="opacity:0.55; pointer-events:none;"':''}>
-        <div class="field">
-          <label>Restricted to</label>
-          <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="lvl-check" data-lvl="${l}" ${t.levels&&t.levels.includes(l)?'checked':''} ${locked?'disabled':''}> ${l}</label>`).join('')}</div>
-        </div>
-        <div class="field">
-          <label>Also visible to</label>
-          <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="visible-lvl-check" data-lvl="${l}" ${t.visibleToLevels&&t.visibleToLevels.includes(l)?'checked':''} ${locked?'disabled':''}> ${l}</label>`).join('')}</div>
-          <div class="muted" style="font-size:10.5px; margin-top:4px;">Visible department-wide to this level, schedulable or not. Admin/Manager always see everything.</div>
-        </div>
-        <div class="field">
-          <label>Cannot combine with</label>
-          ${(()=>{
-            const excludesArr = Array.isArray(t.excludes) ? t.excludes : (t.excludes ? [t.excludes] : []);
-            const otherTasks = state.tasks.filter(o=>o.id!==t.id).map(o=>({id:o.id, name:o.name}));
-            return multiSelectDropdownHtml('exclude-select', otherTasks, excludesArr);
-          })()}
-        </div>
-        <div class="field">
-          <label>Combine with</label>
-          ${(()=>{
-            const otherTasks = state.tasks.filter(o=>o.id!==t.id).map(o=>({id:o.id, name:o.name}));
-            const combineArr = Array.isArray(t.combineWith) ? t.combineWith
-              : t.combineWith==='__rotational__' ? otherTasks.map(o=>o.id)
-              : t.combineWith ? [t.combineWith] : [];
-            return multiSelectDropdownHtml('combine-select', otherTasks, combineArr);
-          })()}
-          <div class="muted" style="font-size:10.5px; margin-top:4px;">Assigns 1 additional task from selected options.</div>
-        </div>
-        <div class="field">
-          <label>Scheduling</label>
-          <label class="same-week-toggle" title="The scheduler picks one person to cover every day this task is needed that week, instead of choosing separately per day.">
-            <input type="checkbox" class="same-week-check" ${t.sameAllWeek?'checked':''} ${locked?'disabled':''}> Same all week
-          </label>
-        </div>
-      </div>
-      ${sharedCount>0 ? `<div class="field">
-        <div class="muted" style="font-size:11px; margin-bottom:6px;">Linked — changes sync to all teams. Notes/exclusions stay local.</div>
-        <button type="button" class="btn secondary small btn-unlink-task" data-ti="${ti}">Unlink — make this team's copy independent</button>
-      </div>` : ''}
-      <div class="field">
-        <label>Notes / conditions</label>
-        <input type="text" class="task-notes" value="${escAttr(t.notes||'')}" placeholder="Optional">
-      </div>
-      </div>
-    </div>`;
+        ${sharedCount>0 ? `<span class="task-lvl-tag" style="background:var(--sage-soft);" title="Name, levels, same-week and visibility stay in sync across linked teams — notes and exclusions stay local">🔗 Linked with ${sharedCount} other team${sharedCount===1?'':'s'}</span>` : ''}
+        ${locked ? `<span class="muted" style="font-size:10.5px; display:block;">Shared with ${grandGroup.perTeam.length-1} other team${grandGroup.perTeam.length-1===1?'':'s'}</span>` : ''}
+      </td>
+      <td class="gt-levels">${multiSelectDropdownHtml('lvl-select', LEVELS.map(l=>({id:l,name:l})), t.levels||[])}
+        <div class="muted gt-hint">${(t.levels&&t.levels.length)?'':'Open to all levels'}</div></td>
+      <td class="gt-levels">${multiSelectDropdownHtml('visible-lvl-select', LEVELS.map(l=>({id:l,name:l})), t.visibleToLevels||[])}</td>
+      <td class="gt-ms">${multiSelectDropdownHtml('exclude-select', otherTasks, excludesArr)}</td>
+      <td class="gt-ms">${multiSelectDropdownHtml('combine-select', otherTasks, combineArr)}</td>
+      <td class="gt-flag"><input type="checkbox" class="same-week-check" ${t.sameAllWeek?'checked':''} ${lockedAttr}></td>
+      <td class="gt-flag">${isGrandShared
+        ? `<label class="gt-flag-label"><input type="checkbox" class="grand-override-check" data-ti="${ti}" ${isOverridden?'checked':''}> Override</label>`
+        : `<label class="gt-flag-label"><input type="checkbox" class="show-in-grand-check" data-ti="${ti}" ${t.showInGrand!==false?'checked':''}> Show</label>`}</td>
+      <td class="gt-notes"><input type="text" class="task-notes" value="${escAttr(t.notes||'')}" placeholder="Optional"></td>
+      <td class="gt-actions">
+        ${sharedCount>0 ? `<button type="button" class="btn-icon btn-unlink-task" data-ti="${ti}" title="Unlink — make this team's copy independent">⛓</button>` : ''}
+        <button class="btn-remove-x btn-del-task" title="Remove">×</button>
+      </td>
+    </tr>`;
   });
+  html += '</tbody></table>';
   wrap.innerHTML = html;
-  enhanceSelectsIn(wrap);
-  wrap.querySelectorAll('.card-expand-toggle').forEach(btn=>{
-    btn.addEventListener('click', ()=> btn.closest('.task-card').classList.toggle('expanded'));
+  // Locked rows follow Grand Tasks, so their multi-selects are read-only too — the checkbox
+  // inputs live inside the dropdown menus, which have no disabled state of their own.
+  wrap.querySelectorAll('tr.grid-row-locked').forEach(row=>{
+    row.querySelectorAll('.lvl-select, .visible-lvl-select').forEach(dd=> dd.classList.add('ms-locked'));
   });
   wrap.querySelectorAll('.grand-override-check').forEach(cb=>{
     cb.addEventListener('change', ()=>{
@@ -5091,8 +5128,8 @@ function renderTasksTab(){
   function readTaskCard(card){
     const ti = +card.dataset.ti;
     const name = card.querySelector('.task-name').value.trim() || 'Untitled task';
-    const levels = Array.from(card.querySelectorAll('.lvl-check:checked')).map(c=>c.dataset.lvl);
-    const visibleToLevels = Array.from(card.querySelectorAll('.visible-lvl-check:checked')).map(c=>c.dataset.lvl);
+    const levels = Array.from(card.querySelectorAll('.lvl-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+    const visibleToLevels = Array.from(card.querySelectorAll('.visible-lvl-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const excludes = Array.from(card.querySelectorAll('.exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const combineWith = Array.from(card.querySelectorAll('.combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const sameAllWeek = card.querySelector('.same-week-check').checked;
@@ -5290,23 +5327,45 @@ function reorderTasks(fromIndex, toIndex){
   const [moved] = state.tasks.splice(fromIndex, 1);
   state.tasks.splice(toIndex, 0, moved);
 
-  const wrap = document.getElementById('tasks-list');
-  const items = Array.from(wrap.children);
-  const movedEl = items[fromIndex];
-  const referenceEl = items[toIndex];
-  if(fromIndex < toIndex) wrap.insertBefore(movedEl, referenceEl.nextSibling);
-  else wrap.insertBefore(movedEl, referenceEl);
-  Array.from(wrap.children).forEach((div,i)=> div.dataset.ti = i);
+  const body = document.querySelector('#tasks-list .tasks-table tbody');
+  if(body){
+    const items = Array.from(body.children);
+    const movedEl = items[fromIndex];
+    const referenceEl = items[toIndex];
+    if(movedEl && referenceEl){
+      if(fromIndex < toIndex) body.insertBefore(movedEl, referenceEl.nextSibling);
+      else body.insertBefore(movedEl, referenceEl);
+    }
+    Array.from(body.children).forEach((row,i)=>{
+      row.dataset.ti = i;
+      row.querySelectorAll('[data-ti]').forEach(el=> el.dataset.ti = i);
+    });
+  }
 
   reorderTeamTableColumns();
   reorderReqTableRows();
 }
+// The People grid shows one column per task, in the same order the Tasks tab lists them, so a
+// reorder there has to move the matching header and every row's cell to keep them lined up.
+function peopleGridTaskOrder(){ return sortedTasksForDisplay(state.tasks).map(t=>t.id); }
 function reorderTeamTableColumns(){
-  const orderIds = state.tasks.map(t=>t.id);
-  document.querySelectorAll('#team-table-wrap .task-elig-grid').forEach(grid=>{
+  const table = document.querySelector('#team-table-wrap .people-table');
+  if(!table) return;
+  const orderIds = peopleGridTaskOrder();
+  const headRow = table.querySelector('thead tr');
+  const actionsTh = headRow && headRow.querySelector('th.pt-actions');
+  if(headRow && actionsTh){
     orderIds.forEach(id=>{
-      const cb = grid.querySelector(`.checkbox[data-task="${id}"]`);
-      if(cb) grid.appendChild(cb.closest('.task-elig-chip'));
+      const th = headRow.querySelector(`th.pt-task[data-task="${id}"]`);
+      if(th) headRow.insertBefore(th, actionsTh);
+    });
+  }
+  table.querySelectorAll('tbody tr.member-card').forEach(row=>{
+    const actionsTd = row.querySelector('td.pt-actions');
+    if(!actionsTd) return;
+    orderIds.forEach(id=>{
+      const cell = row.querySelector(`td.pt-task-cell[data-task="${id}"]`);
+      if(cell) row.insertBefore(cell, actionsTd);
     });
   });
 }
@@ -5326,19 +5385,40 @@ function reorderReqTableRows(){
 // full re-render — a full rebuild would wipe out any checkbox/number edits on those tabs that
 // haven't been saved yet. A brand-new task starts blank (unchecked / all zeros) everywhere.
 function addTaskColumnToTeamTable(task){
-  document.querySelectorAll('#team-table-wrap .task-elig-grid').forEach(grid=>{
-    const chip = document.createElement('label');
-    chip.className = 'task-elig-chip';
-    chip.innerHTML = `<span class="checkbox" data-task="${task.id}" role="checkbox" aria-checked="false" tabindex="0">${checkSvg}</span><span class="task-elig-chip-label">${escHtml(task.name)}</span>`;
-    grid.appendChild(chip);
-    const cb = chip.querySelector('.checkbox');
+  const table = document.querySelector('#team-table-wrap .people-table');
+  if(!table) return;
+  const headRow = table.querySelector('thead tr');
+  const actionsTh = headRow && headRow.querySelector('th.pt-actions');
+  if(headRow && actionsTh){
+    const th = document.createElement('th');
+    th.className = 'pt-task';
+    th.dataset.task = task.id;
+    th.title = task.name;
+    th.innerHTML = `<span>${escHtml(task.name)}</span>`;
+    headRow.insertBefore(th, actionsTh);
+  }
+  table.querySelectorAll('tbody tr.member-card').forEach(row=>{
+    const actionsTd = row.querySelector('td.pt-actions');
+    if(!actionsTd) return;
+    const td = document.createElement('td');
+    td.className = 'pt-task-cell';
+    td.dataset.task = task.id;
+    td.innerHTML = `<span class="checkbox" data-task="${task.id}" role="checkbox" aria-checked="false" tabindex="0" title="${escAttr(task.name)}">${checkSvg}</span>`;
+    row.insertBefore(td, actionsTd);
+    const cb = td.querySelector('.checkbox');
     const toggle = ()=>{ cb.classList.toggle('checked'); cb.setAttribute('aria-checked', cb.classList.contains('checked')); };
     cb.addEventListener('click', toggle);
     cb.addEventListener('keydown', e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); toggle(); } });
   });
+  // The group bands span every column, so they have to grow with the table.
+  table.querySelectorAll('tr.people-group-header td').forEach(td=> td.colSpan = td.colSpan + 1);
 }
 function removeTaskColumnFromTeamTable(taskId){
-  document.querySelectorAll(`#team-table-wrap .checkbox[data-task="${taskId}"]`).forEach(cb=> cb.closest('.task-elig-chip').remove());
+  const table = document.querySelector('#team-table-wrap .people-table');
+  if(!table) return;
+  let removed = 0;
+  table.querySelectorAll(`th.pt-task[data-task="${taskId}"], td.pt-task-cell[data-task="${taskId}"]`).forEach(el=>{ el.remove(); removed++; });
+  if(removed>0) table.querySelectorAll('tr.people-group-header td').forEach(td=> td.colSpan = Math.max(1, td.colSpan - 1));
 }
 function addTaskRowToReqTable(task){
   const wrap = document.getElementById('req-table-wrap');
@@ -5347,8 +5427,8 @@ function addTaskRowToReqTable(task){
   const tbody = table.querySelector('tbody');
   const tr = document.createElement('tr');
   tr.dataset.task = task.id;
-  let cells = `<td style="font-weight:600; text-align:left;">${escHtml(task.name)}</td>`;
-  DAYS.forEach(d=> cells += `<td><input type="number" min="0" class="req-input" data-day="${d}" value="0"></td>`);
+  let cells = `<td style="font-weight:600; text-align:left;"><div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;"><span>${escHtml(task.name)}</span></div></td>`;
+  DAYS.forEach(d=> cells += `<td><div class="stepper"><button type="button" class="stepper-btn" data-dir="-1">−</button><input type="number" min="0" class="req-input stepper-val" data-day="${d}" value="0"><button type="button" class="stepper-btn" data-dir="1">+</button></div></td>`);
   tr.innerHTML = cells;
   tbody.insertBefore(tr, tbody.firstElementChild); // straight to the top of the list
   tr.querySelectorAll('.req-input').forEach(inp=>{
@@ -6098,112 +6178,31 @@ function departmentNameLine(){
   const dept = state.departments.find(d=>d.id===currentDepartmentId);
   return dept ? `Combined view across every team in ${escHtml(dept.name)}.` : 'Combined view across every team in this department.';
 }
-function renderGrandTaskSettingsPanel(g, panel){
-  // Teams may already disagree on these settings, since each is an independent copy unless
-  // linked — the first team's values are shown as a starting point; saving overwrites all of
-  // them with whatever's set here, same as any other "apply to all" action in this app.
-  const sample = g.perTeam[0].task;
-  const sampleTeamId = g.perTeam[0].team.id;
-  const overriddenCount = g.perTeam.filter(pt=>pt.task.grandOverride===true).length;
-  // The union of every distinct task name across every team in this group — what an admin can
-  // actually pick from here, since "combine with X" only means something if at least one team
-  // in this group genuinely has a task called X.
-  const nameSet = new Map(); // lowercased name -> display name
+// The union of every distinct task name across a group's teams — what "cannot combine with"
+// and "combine with" can actually point at, since a pairing only means something if at least
+// one team in the group genuinely has a task by that name. Keyed by lowercased name because
+// each team's copy is its own record with its own id.
+function grandPairingOptions(g){
+  const nameSet = new Map();
   g.perTeam.forEach(({team})=>{
     (state.tasksByTeam[team.id]||[]).forEach(t=>{
       const key = (t.name||'').trim().toLowerCase();
       if(key && key!==(g.displayName||'').trim().toLowerCase()) nameSet.set(key, t.name);
     });
   });
-  const nameOptions = Array.from(nameSet.entries()).map(([key,name])=>({id:key, name}));
-  // Resolve the sample team's own excludes/combineWith (stored as that team's own task ids)
-  // back into names, so the dropdown shows something meaningful regardless of which team's
-  // copy happens to be used as the starting point.
-  function idsToNames(ids, teamId){
-    const teamTasks = state.tasksByTeam[teamId] || [];
-    return (ids||[]).map(id=>{
-      const t = teamTasks.find(x=>x.id===id);
-      return t ? (t.name||'').trim().toLowerCase() : null;
-    }).filter(Boolean);
-  }
-  const sampleExcludesArr = Array.isArray(sample.excludes) ? sample.excludes : (sample.excludes ? [sample.excludes] : []);
-  const sampleCombineArr = Array.isArray(sample.combineWith) ? sample.combineWith : (sample.combineWith ? [sample.combineWith] : []);
-  const excludesNames = idsToNames(sampleExcludesArr, sampleTeamId);
-  const combineNames = idsToNames(sampleCombineArr, sampleTeamId);
-
-  panel.innerHTML = `
-    <div class="task-card-grid" style="padding:0 4px;">
-      <div class="field">
-        <label>Restricted to</label>
-        <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="grand-task-lvl-check" data-lvl="${l}" ${sample.levels&&sample.levels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
-      </div>
-      <div class="field">
-        <label>Also visible to</label>
-        <div class="m-level-cell">${LEVELS.map(l=>`<label class="chip-check"><input type="checkbox" class="grand-task-visible-check" data-lvl="${l}" ${sample.visibleToLevels&&sample.visibleToLevels.includes(l)?'checked':''}> ${l}</label>`).join('')}</div>
-      </div>
-      <div class="field">
-        <label>Cannot combine with</label>
-        ${multiSelectDropdownHtml('grand-task-exclude-select', nameOptions, excludesNames)}
-        <div class="muted" style="font-size:10px; margin-top:3px;">By task name — applied to whichever team actually has a matching task.</div>
-      </div>
-      <div class="field">
-        <label>Combine with</label>
-        ${multiSelectDropdownHtml('grand-task-combine-select', nameOptions, combineNames)}
-        <div class="muted" style="font-size:10px; margin-top:3px;">Same — by name, resolved per team.</div>
-      </div>
-      <div class="field">
-        <label>Scheduling</label>
-        <label class="same-week-toggle"><input type="checkbox" class="grand-task-same-week-check" ${sample.sameAllWeek?'checked':''}> Same all week</label>
-      </div>
-    </div>
-    <div class="muted" style="font-size:11px; margin:8px 4px 0;">Applies to all ${g.perTeam.length} team${g.perTeam.length===1?'':'s'} sharing this name.${overriddenCount>0?` ${overriddenCount} team${overriddenCount===1?' has':'s have'} "Override" checked and ${overriddenCount===1?'is':'are'} skipped — unaffected by saving here.`:''}</div>
-    <div class="grand-task-save-warning muted" style="font-size:11px; margin:6px 4px 0; display:none; background:var(--gold-soft); border-radius:8px; padding:7px 11px;"></div>
-    <div class="row" style="margin-top:10px; padding:0 4px;"><div class="spacer"></div><button type="button" class="btn small btn-save-grand-task-settings">Save to all teams</button></div>
-  `;
-  wireMsDropdowns(panel);
-  panel.querySelector('.btn-save-grand-task-settings').addEventListener('click', async ()=>{
-    const levels = Array.from(panel.querySelectorAll('.grand-task-lvl-check:checked')).map(c=>c.dataset.lvl);
-    const visibleToLevels = Array.from(panel.querySelectorAll('.grand-task-visible-check:checked')).map(c=>c.dataset.lvl);
-    const sameAllWeek = panel.querySelector('.grand-task-same-week-check').checked;
-    const excludeNamesSelected = Array.from(panel.querySelectorAll('.grand-task-exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
-    const combineNamesSelected = Array.from(panel.querySelectorAll('.grand-task-combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
-    const touchedTeamIds = new Set();
-    const unresolved = []; // { teamName, taskName } — a selected name that didn't exist on this team
-    for(const {team, task} of g.perTeam){
-      if(task.grandOverride===true) continue; // this team's copy stays fully independent
-      const teamTasks = state.tasksByTeam[team.id] || [];
-      function resolveNames(names){
-        const ids = [];
-        names.forEach(nameKey=>{
-          const match = teamTasks.find(t=> t.id!==task.id && (t.name||'').trim().toLowerCase()===nameKey);
-          if(match) ids.push(match.id);
-          else unresolved.push({ teamName: team.name, taskName: nameSet.get(nameKey) || nameKey });
-        });
-        return ids;
-      }
-      task.levels = [...levels];
-      task.visibleToLevels = [...visibleToLevels];
-      task.sameAllWeek = sameAllWeek;
-      task.excludes = resolveNames(excludeNamesSelected);
-      task.combineWith = resolveNames(combineNamesSelected);
-      await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
-      touchedTeamIds.add(team.id);
-    }
-    logAudit('task.grand_settings_save', { name: g.displayName, teams: touchedTeamIds.size });
-    const warnEl = panel.querySelector('.grand-task-save-warning');
-    if(unresolved.length>0){
-      const lines = unresolved.map(u=>`${escHtml(u.teamName)} has no task named "${escHtml(u.taskName)}"`);
-      warnEl.innerHTML = `⚠ Saved, but ${unresolved.length} pairing${unresolved.length===1?'':'s'} couldn't apply — ${lines.join('; ')}. Everything else saved normally.`;
-      warnEl.style.display = 'block';
-    } else {
-      warnEl.style.display = 'none';
-    }
-    showToast(`Saved to ${touchedTeamIds.size} team${touchedTeamIds.size===1?'':'s'}`);
-    if(touchedTeamIds.has(currentTeamId)){ renderTasksTab(); renderReqTab(); }
-  });
+  return Array.from(nameSet.entries()).map(([key,name])=>({id:key, name}));
+}
+function grandIdsToNameKeys(ids, teamId){
+  const teamTasks = state.tasksByTeam[teamId] || [];
+  return (ids||[]).map(id=>{
+    const t = teamTasks.find(x=>x.id===id);
+    return t ? (t.name||'').trim().toLowerCase() : null;
+  }).filter(Boolean);
 }
 async function renderGrandTasksTab(){
   const wrap = document.getElementById('grand-tasks-list');
+  const warnEl = document.getElementById('grand-tasks-warning');
+  if(warnEl){ warnEl.style.display = 'none'; warnEl.innerHTML = ''; }
   if(!ensureDepartmentSelected()){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
     return;
@@ -6215,36 +6214,55 @@ async function renderGrandTasksTab(){
     return;
   }
   const teamCount = teamsInDepartment(currentDepartmentId).length;
-  wrap.innerHTML = names.map(key=>{
+
+  // Same grid as the team-level Tasks tab, one row per shared task name instead of per task.
+  let html = `<table class="grid-table tasks-table"><thead><tr>
+    <th class="gt-name">Task</th>
+    <th class="gt-flag">On</th>
+    <th class="gt-levels" title="Only these levels can be scheduled for it. None ticked = open to all levels.">Restricted to</th>
+    <th class="gt-levels" title="Visible department-wide to these levels, schedulable or not.">Also visible to</th>
+    <th class="gt-ms" title="By task name — applied to whichever team actually has a matching task">Cannot combine with</th>
+    <th class="gt-ms" title="By task name — applied to whichever team actually has a matching task">Combine with</th>
+    <th class="gt-flag" title="The scheduler picks one person to cover every day this task is needed that week">Same all week</th>
+    <th class="gt-actions"></th>
+  </tr></thead><tbody>`;
+
+  names.forEach(key=>{
     const g = groups[key];
+    // Teams may already disagree on these settings, since each copy is independent unless
+    // linked — the first team's values are shown as the starting point, and saving overwrites
+    // every team that follows grand, same as any other "apply to all" action in this app.
+    const sample = g.perTeam[0].task;
+    const sampleTeamId = g.perTeam[0].team.id;
+    const overriddenCount = g.perTeam.filter(pt=>pt.task.grandOverride===true).length;
+    const pairOptions = grandPairingOptions(g);
+    const sampleExcludes = Array.isArray(sample.excludes) ? sample.excludes : (sample.excludes ? [sample.excludes] : []);
+    const sampleCombine = Array.isArray(sample.combineWith) ? sample.combineWith : (sample.combineWith ? [sample.combineWith] : []);
     const onAll = g.perTeam.length >= teamCount;
-    return `<div class="grand-task-row" data-key="${escAttr(key)}" style="border-bottom:1px solid var(--line);">
-      <div class="row" style="padding:9px 0;">
-        <button type="button" class="req-breakdown-toggle btn-grand-task-settings-toggle" data-key="${escAttr(key)}" title="Edit settings">⚙</button>
-        <span style="font-weight:600; font-size:13.5px; margin-left:8px;">${escHtml(g.displayName)}</span>
-        <span class="muted" style="font-size:11.5px; margin-left:10px;">${onAll ? `on all ${teamCount} teams` : `on ${g.perTeam.length} of ${teamCount} teams`}</span>
-        <div class="spacer"></div>
-        <button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all teams</button>
-      </div>
-      <div class="grand-task-settings-panel" data-key="${escAttr(key)}" style="display:none; padding:0 0 14px 0;"></div>
-    </div>`;
-  }).join('');
-  wrap.querySelectorAll('.btn-grand-task-settings-toggle').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const key = btn.dataset.key;
-      const panel = wrap.querySelector(`.grand-task-settings-panel[data-key="${key}"]`);
-      const isOpen = panel.style.display !== 'none';
-      panel.style.display = isOpen ? 'none' : 'block';
-      btn.textContent = isOpen ? '⚙' : '⚙';
-      if(!isOpen) renderGrandTaskSettingsPanel(groups[key], panel);
-    });
+    html += `<tr class="grand-task-row" data-key="${escAttr(key)}">
+      <td class="gt-name">
+        <div class="gt-name-line"><span style="font-weight:600;">${escHtml(g.displayName)}</span></div>
+        ${overriddenCount>0 ? `<span class="muted" style="font-size:10.5px; display:block;">${overriddenCount} team${overriddenCount===1?' has':'s have'} Override — skipped</span>` : ''}
+      </td>
+      <td class="gt-flag"><span class="muted" style="font-size:11px; white-space:nowrap;">${onAll ? `all ${teamCount}` : `${g.perTeam.length} of ${teamCount}`}</span></td>
+      <td class="gt-levels">${multiSelectDropdownHtml('grand-lvl-select', LEVELS.map(l=>({id:l,name:l})), sample.levels||[])}</td>
+      <td class="gt-levels">${multiSelectDropdownHtml('grand-visible-select', LEVELS.map(l=>({id:l,name:l})), sample.visibleToLevels||[])}</td>
+      <td class="gt-ms">${multiSelectDropdownHtml('grand-exclude-select', pairOptions, grandIdsToNameKeys(sampleExcludes, sampleTeamId))}</td>
+      <td class="gt-ms">${multiSelectDropdownHtml('grand-combine-select', pairOptions, grandIdsToNameKeys(sampleCombine, sampleTeamId))}</td>
+      <td class="gt-flag"><input type="checkbox" class="grand-same-week-check" ${sample.sameAllWeek?'checked':''}></td>
+      <td class="gt-actions"><button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all</button></td>
+    </tr>`;
   });
+  html += '</tbody></table>';
+  wrap.innerHTML = html;
+  wireMsDropdowns(wrap);
+
   wrap.querySelectorAll('.btn-grand-remove-task').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const g = groups[btn.dataset.key];
       if(!g) return;
       askConfirm(`Remove "${g.displayName}" from ${g.perTeam.length} team${g.perTeam.length===1?'':'s'}? This deletes it and its weekly needs on each — any days already scheduled with it get cleared too, on every affected team.`, 'Remove from all teams', async ()=>{
-        const snapshot = g.perTeam.map(({team, task})=>({
+        const snapshot = g.perTeam.map(({team})=>({
           teamId: team.id,
           tasks: JSON.parse(JSON.stringify(state.tasksByTeam[team.id]||[])),
           req: JSON.parse(JSON.stringify(state.reqByTeam[team.id]||{})),
@@ -6278,6 +6296,65 @@ async function renderGrandTasksTab(){
       });
     });
   });
+
+  const saveBtn = document.getElementById('btn-save-all-grand-tasks');
+  if(saveBtn && !saveBtn.dataset.wired){
+    saveBtn.dataset.wired = '1';
+    saveBtn.addEventListener('click', async ()=>{
+      const listWrap = document.getElementById('grand-tasks-list');
+      const rows = Array.from(listWrap.querySelectorAll('tr.grand-task-row'));
+      if(rows.length===0) return;
+      const liveGroups = grandTaskGroups(currentDepartmentId);
+      const touchedTeamIds = new Set();
+      const unresolved = []; // a selected name that doesn't exist on some team in the group
+      for(const row of rows){
+        const g = liveGroups[row.dataset.key];
+        if(!g) continue;
+        const levels = Array.from(row.querySelectorAll('.grand-lvl-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+        const visibleToLevels = Array.from(row.querySelectorAll('.grand-visible-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+        const sameAllWeek = row.querySelector('.grand-same-week-check').checked;
+        const excludeNames = Array.from(row.querySelectorAll('.grand-exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+        const combineNames = Array.from(row.querySelectorAll('.grand-combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+        const displayFor = new Map(grandPairingOptions(g).map(o=>[o.id, o.name]));
+        for(const {team, task} of g.perTeam){
+          if(task.grandOverride===true) continue; // this team's copy stays fully independent
+          const teamTasks = state.tasksByTeam[team.id] || [];
+          const resolveNames = list=>{
+            const ids = [];
+            list.forEach(nameKey=>{
+              const match = teamTasks.find(t=> t.id!==task.id && (t.name||'').trim().toLowerCase()===nameKey);
+              if(match) ids.push(match.id);
+              else unresolved.push({ teamName: team.name, taskName: displayFor.get(nameKey) || nameKey });
+            });
+            return ids;
+          };
+          task.levels = [...levels];
+          task.visibleToLevels = [...visibleToLevels];
+          task.sameAllWeek = sameAllWeek;
+          task.excludes = resolveNames(excludeNames);
+          task.combineWith = resolveNames(combineNames);
+          touchedTeamIds.add(team.id);
+        }
+      }
+      for(const teamId of touchedTeamIds){
+        await safeSet('tasks_'+teamId, state.tasksByTeam[teamId], true);
+      }
+      logAudit('task.grand_settings_save', { department: currentDepartmentId, tasks: rows.length, teams: touchedTeamIds.size });
+      const warnEl2 = document.getElementById('grand-tasks-warning');
+      if(warnEl2){
+        if(unresolved.length>0){
+          const lines = unresolved.map(u=>`${escHtml(u.teamName)} has no task named "${escHtml(u.taskName)}"`);
+          warnEl2.innerHTML = `⚠ Saved, but ${unresolved.length} pairing${unresolved.length===1?'':'s'} couldn't apply — ${lines.join('; ')}. Everything else saved normally.`;
+          warnEl2.style.display = 'block';
+        } else {
+          warnEl2.style.display = 'none';
+        }
+      }
+      showToast(`Saved ${rows.length} task${rows.length===1?'':'s'} to ${touchedTeamIds.size} team${touchedTeamIds.size===1?'':'s'}`);
+      if(touchedTeamIds.has(currentTeamId)){ renderTasksTab(); renderReqTab(); }
+      renderGrandTasksTab();
+    });
+  }
 }
 async function renderGrandTab(){
   if(!ensureDepartmentSelected()){
