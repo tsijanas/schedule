@@ -247,6 +247,14 @@
   }
   .taskname-inner{ display:flex; flex-direction:column; justify-content:center; gap:2px; height:100%; min-height:34px; }
   .taskname-text{ display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* A task that carries a link. Deliberately quiet — same weight and colour as a plain task
+     name, with only a small arrow to say it goes somewhere, so rows with and without a link
+     still read as one list. */
+  .taskname-link{ display:flex; align-items:center; gap:3px; min-width:0; color:inherit; text-decoration:none; }
+  .taskname-link .taskname-text{ min-width:0; }
+  .taskname-link:hover .taskname-text, .taskname-link:focus-visible .taskname-text{ text-decoration:underline; }
+  .taskname-link-mark{ flex:none; font-size:0.8em; opacity:0.5; }
+  .taskname-link:hover .taskname-link-mark{ opacity:1; }
   .sched-table thead th:first-child{ position:sticky; left:0; z-index:3; background:var(--gold-soft); text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .sched-table tbody tr:nth-child(even) td:not(.taskname){ background:rgba(23,50,58,0.02); }
   .sched-table thead th:nth-child(3), .sched-table thead th:nth-child(5), .sched-table thead th:nth-child(7),
@@ -552,6 +560,8 @@
   .tasks-table .gt-ms{ min-width:150px; }
   .tasks-table .gt-flag{ width:74px; text-align:center; }
   .tasks-table .gt-flag-label{ display:inline-flex; align-items:center; gap:4px; font-size:11px; white-space:nowrap; }
+  .tasks-table .gt-link{ min-width:170px; }
+  .tasks-table .gt-link input{ width:100%; font-size:12px; padding:4px 6px; }
   .tasks-table .gt-notes{ min-width:180px; }
   .tasks-table .gt-notes input{ width:100%; font-size:12px; padding:4px 6px; }
   .tasks-table .gt-actions{ white-space:nowrap; text-align:right; }
@@ -5054,6 +5064,7 @@ function renderTasksTab(){
     <th class="gt-ms" title="Assigns 1 additional task from these">Combine with</th>
     <th class="gt-flag" title="The scheduler picks one person to cover every day this task is needed that week">Same all week</th>
     <th class="gt-flag">Grand</th>
+    <th class="gt-link" title="Where this task is actually worked — a queue, dashboard or runbook. The task name becomes a link to it on every schedule.">Link</th>
     <th class="gt-notes">Notes / conditions</th>
     <th class="gt-actions"></th>
   </tr></thead><tbody>`;
@@ -5096,6 +5107,8 @@ function renderTasksTab(){
       <td class="gt-flag">${isGrandShared
         ? `<label class="gt-flag-label"><input type="checkbox" class="grand-override-check" data-ti="${ti}" ${isOverridden?'checked':''}> Override</label>`
         : `<label class="gt-flag-label"><input type="checkbox" class="show-in-grand-check" data-ti="${ti}" ${t.showInGrand!==false?'checked':''}> Show</label>`}</td>
+      <td class="gt-link"><input type="url" class="task-link" value="${escAttr(t.url||'')}" placeholder="Optional" ${locked?'readonly':''}>
+        ${(t.url && !taskLinkHref(t.url)) ? `<div class="muted gt-hint" style="color:var(--brick-text);">Not a usable web address</div>` : ''}</td>
       <td class="gt-notes"><input type="text" class="task-notes" value="${escAttr(t.notes||'')}" placeholder="Optional"></td>
       <td class="gt-actions">
         ${sharedCount>0 ? `<button type="button" class="btn-icon btn-unlink-task" data-ti="${ti}" title="Unlink — make this team's copy independent">⛓</button>` : ''}
@@ -5126,12 +5139,13 @@ function renderTasksTab(){
     const combineWith = Array.from(card.querySelectorAll('.combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const sameAllWeek = card.querySelector('.same-week-check').checked;
     const notes = card.querySelector('.task-notes').value;
+    const url = card.querySelector('.task-link').value.trim();
     const overrideCb = card.querySelector('.grand-override-check');
     const showInGrandCb = card.querySelector('.show-in-grand-check');
     const extra = {};
     if(overrideCb) extra.grandOverride = overrideCb.checked;
     if(showInGrandCb) extra.showInGrand = showInGrandCb.checked;
-    return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, sameAllWeek, notes, ...extra } };
+    return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, sameAllWeek, notes, url, ...extra } };
   }
   function updateDeleteSelectedTasksState(){
     const checked = wrap.querySelectorAll('.card-select-check:checked').length;
@@ -5209,6 +5223,7 @@ function renderTasksTab(){
               match.levels = [...(task.levels||[])];
               match.sameAllWeek = task.sameAllWeek;
               match.visibleToLevels = [...(task.visibleToLevels||[])];
+              match.url = task.url || '';
               linkedTeamIdsTouched.add(team.id);
             }
           });
@@ -6216,6 +6231,7 @@ async function renderGrandTasksTab(){
     <th class="gt-ms" title="By task name — applied to whichever team actually has a matching task">Cannot combine with</th>
     <th class="gt-ms" title="By task name — applied to whichever team actually has a matching task">Combine with</th>
     <th class="gt-flag" title="The scheduler picks one person to cover every day this task is needed that week">Same all week</th>
+    <th class="gt-link" title="Where this task is actually worked. The task name becomes a link to it on every schedule, for every team here.">Link</th>
     <th class="gt-actions"></th>
   </tr></thead><tbody>`;
 
@@ -6242,6 +6258,7 @@ async function renderGrandTasksTab(){
       <td class="gt-ms">${multiSelectDropdownHtml('grand-exclude-select', pairOptions, grandIdsToNameKeys(sampleExcludes, sampleTeamId))}</td>
       <td class="gt-ms">${multiSelectDropdownHtml('grand-combine-select', pairOptions, grandIdsToNameKeys(sampleCombine, sampleTeamId))}</td>
       <td class="gt-flag"><input type="checkbox" class="grand-same-week-check" ${sample.sameAllWeek?'checked':''}></td>
+      <td class="gt-link"><input type="url" class="grand-task-link" value="${escAttr(sample.url||'')}" placeholder="Optional"></td>
       <td class="gt-actions"><button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all</button></td>
     </tr>`;
   });
@@ -6305,6 +6322,7 @@ async function renderGrandTasksTab(){
         const levels = Array.from(row.querySelectorAll('.grand-lvl-select .ms-dropdown-menu input:checked')).map(c=>c.value);
         const visibleToLevels = Array.from(row.querySelectorAll('.grand-visible-select .ms-dropdown-menu input:checked')).map(c=>c.value);
         const sameAllWeek = row.querySelector('.grand-same-week-check').checked;
+        const url = row.querySelector('.grand-task-link').value.trim();
         const excludeNames = Array.from(row.querySelectorAll('.grand-exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
         const combineNames = Array.from(row.querySelectorAll('.grand-combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
         const displayFor = new Map(grandPairingOptions(g).map(o=>[o.id, o.name]));
@@ -6323,6 +6341,7 @@ async function renderGrandTasksTab(){
           task.levels = [...levels];
           task.visibleToLevels = [...visibleToLevels];
           task.sameAllWeek = sameAllWeek;
+          task.url = url;
           task.excludes = resolveNames(excludeNames);
           task.combineWith = resolveNames(combineNames);
           touchedTeamIds.add(team.id);
@@ -7076,7 +7095,7 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
     const fetched = await Promise.all(rowTeams.map(team=> loadWeekForTeam(team.id, weekISO)));
     rowTeams.forEach((team,i)=>{ rowTeamData[team.id] = { sched: fetched[i] }; });
   }
-  let html = `<tr data-gkey="${escAttr(key)}"><td class="taskname" title="${escAttr(g.displayName)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(g.displayName)}</span></div></td>`;
+  let html = `<tr data-gkey="${escAttr(key)}"><td class="taskname" title="${escAttr(g.displayName)}">${taskNameLabelHtml(g.displayName, groupTaskLink(g))}</td>`;
 
   const allSameAllWeek = g.perTeam.length>0 && g.perTeam.every(({task})=>task.sameAllWeek);
   let runs = [];
@@ -7372,6 +7391,47 @@ function shuffleTiedGroups(arr, keyFn){
 // up predictably (matters a lot now that Grand Schedule merges same-named tasks together).
 // This only affects display order — the actual stored array (and Task rules' own drag-to-reorder)
 // is untouched.
+// ---- Task links ----
+// A task can carry a URL (the queue it's worked in, its runbook, a dashboard). Wherever a task
+// name is shown as a row label, the name itself becomes the link — nothing is added to tasks
+// that have none, so the schedule stays as uncluttered as it was. Editing a name is unaffected:
+// that only happens on the Tasks grid, where the name stays a plain input and the URL has its
+// own column.
+function taskLinkHref(raw){
+  const v = (raw||'').trim();
+  if(!v) return null;
+  // Bare domains are what people actually paste, so accept them — but everything is resolved
+  // through URL() and only http/https is allowed out the other side. That's what stops a
+  // "javascript:" or "data:" URL saved by one admin becoming a trap for everyone else.
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v) ? v : 'https://' + v;
+  try{
+    const u = new URL(candidate);
+    if(u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    // URL() happily turns a sentence into a "host", so a stray note typed in this field would
+    // otherwise render as a dead link. Require something that at least looks like a hostname.
+    if(!u.hostname || (!u.hostname.includes('.') && u.hostname !== 'localhost')) return null;
+    if(/\s/.test(u.hostname)) return null;
+    return u.href;
+  }catch(e){ return null; }
+}
+// The first link set for a task name across a group of teams — Grand views merge teams by
+// name, and a link is a property of the task rather than of one team's copy of it.
+function groupTaskLink(g){
+  for(const pt of (g && g.perTeam) || []){
+    const href = taskLinkHref(pt.task && pt.task.url);
+    if(href) return href;
+  }
+  return null;
+}
+function taskNameLabelHtml(name, url, extraHtml){
+  const href = taskLinkHref(url);
+  // The arrow sits outside the truncating span, so a long task name ellipsises but the marker
+  // saying "this goes somewhere" is never the bit that gets cut off.
+  const label = href
+    ? `<a class="taskname-link" href="${escAttr(href)}" target="_blank" rel="noopener noreferrer" title="${escAttr(name)} — opens ${escAttr(href)}"><span class="taskname-text">${escHtml(name)}</span><span class="taskname-link-mark" aria-hidden="true">\u2197</span></a>`
+    : `<span class="taskname-text">${escHtml(name)}</span>`;
+  return `<div class="taskname-inner">${label}${extraHtml||''}</div>`;
+}
 function sortedTasksForDisplay(tasks){
   return [...tasks].sort((a,b)=> (a.name||'').localeCompare(b.name||''));
 }
@@ -7978,7 +8038,7 @@ function buildScheduleTableHtml(teamId){
   html += '</tr></thead><tbody>';
   sortedTasksForDisplay(state.tasks).forEach(task=>{
     const lvlTag = (task.levels && task.levels.length) ? `<span class="task-lvl-tag">${escHtml(task.levels.join('/'))}</span>` : '';
-    html += `<tr><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(task.name)}</span>${lvlTag}</div></td>`;
+    html += `<tr><td class="taskname" title="${escAttr(task.name)}">${taskNameLabelHtml(task.name, task.url, lvlTag)}</td>`;
     runsFor(task.id).forEach(run=>{
       const span = run.endIdx - run.startIdx + 1;
       const primaryDate = run.dates[0];
@@ -9348,7 +9408,7 @@ async function renderWhosOnTab(){
   names.forEach(key=>{
     const g = groups[key];
     const showTeam = g.perTeam.length>1;
-    html += `<tr><td class="taskname" title="${escAttr(g.displayName)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(g.displayName)}</span></div></td>`;
+    html += `<tr><td class="taskname" title="${escAttr(g.displayName)}">${taskNameLabelHtml(g.displayName, groupTaskLink(g))}</td>`;
     dates.forEach(dISO=>{
       let entries = [];
       g.perTeam.forEach(({team, task})=>{
@@ -9512,7 +9572,7 @@ function drawViewerScheduleGrid(sched){
     ? visibleTasksForViewer(sortedTasksForDisplay(state.tasks), sched, dates, viewerIdentityId)
     : sortedTasksForDisplay(state.tasks);
   visibleTasks.forEach(task=>{
-    html += `<tr><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(task.name)}</span></div></td>`;
+    html += `<tr><td class="taskname" title="${escAttr(task.name)}">${taskNameLabelHtml(task.name, task.url)}</td>`;
     runsFor(task.id).forEach(run=>{
       const span = run.endIdx - run.startIdx + 1;
       const spanned = span > 1;
@@ -9613,7 +9673,7 @@ function viewerGrandTaskRowHtml(g, scheds, dates, scopeIds){
   } else {
     dates.forEach((d,i)=> runs.push({startIdx:i, endIdx:i}));
   }
-  let html = `<tr><td class="taskname" title="${escAttr(g.displayName)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(g.displayName)}</span></div></td>`;
+  let html = `<tr><td class="taskname" title="${escAttr(g.displayName)}">${taskNameLabelHtml(g.displayName, groupTaskLink(g))}</td>`;
   runs.forEach(run=>{
     const span = run.endIdx - run.startIdx + 1;
     const spanned = span > 1;
