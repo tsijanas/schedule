@@ -636,6 +636,7 @@
   /* Team rows on Department -> Teams. The name is the field that should absorb spare width,
      but .fsel (the enhanced-select wrapper) defaults to width:100%, which otherwise collapses
      the name box to a few pixels and leaves the row looking like it has no name field at all. */
+  .dept-team-row .dept-team-independent-label{ font-size:11px; white-space:nowrap; flex-shrink:0; }
   .dept-team-row .fsel{ width:auto; }
   .dept-team-row select, .dept-team-row .fsel-trigger{ max-width:190px; }
   .dept-team-row .dept-team-name-edit{ flex:1 1 140px; min-width:110px; }
@@ -2616,6 +2617,9 @@ function renderDeptTeamsCard(){
       ${managerOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
     </select>
     <span class="muted" style="font-size:11.5px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
+    <label class="chip-check dept-team-independent-label" title="Off: this team takes its tasks, weekly needs and rotation from the department, and shares cover with the other teams here. On: it runs its own, and its people are left out of the department's rotation — it still appears in the Grand views.">
+      <input type="checkbox" class="dept-team-independent" data-team="${t.id}" ${t.independent===true?'checked':''}> Independent
+    </label>
     ${moveSelectHtml(t)}
     <button type="button" class="btn secondary small dept-team-duplicate-btn" data-team="${t.id}" title="Create a new team with the same tasks and weekly needs">Duplicate</button>
     <button type="button" class="btn-remove-x dept-team-remove-btn" data-team="${t.id}" title="Remove team">×</button>
@@ -2657,6 +2661,22 @@ function renderDeptTeamsCard(){
     inp.addEventListener('blur', saveIfChanged);
     inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
     inp.addEventListener('click', e=> e.stopPropagation());
+  });
+  wrap.querySelectorAll('.dept-team-independent').forEach(cb=>{
+    cb.addEventListener('change', async ()=>{
+      const team = state.teams.find(t=>t.id===cb.dataset.team);
+      if(!team) return;
+      const prev = team.independent === true;
+      team.independent = cb.checked;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){
+        logAudit('team.independence_toggle', { team: team.name, independent: cb.checked });
+        showToast(cb.checked
+          ? `${team.name} now runs its own tasks, needs and rotation`
+          : `${team.name} follows ${(state.departments.find(d=>d.id===team.departmentId)||{}).name||'its department'} again`);
+      } else { team.independent = prev; cb.checked = prev; }
+      renderDeptTeamsCard();
+    });
   });
   wrap.querySelectorAll('.dept-team-manager-edit').forEach(sel=>{
     sel.addEventListener('change', async ()=>{
@@ -5886,7 +5906,7 @@ async function applyGrandRequirementToTeams({ silent = false } = {}){
   const teamSizes = {};
   teamsInDepartment(currentDepartmentId).forEach(t=> teamSizes[t.id] = state.members.filter(m=>m.teamId===t.id).length);
 
-  const followersOf = g=> g.perTeam.filter(pt=> pt.task.reqOverride !== true);
+  const followersOf = g=> g.perTeam.filter(pt=> pt.task.reqOverride !== true && teamFollowsDepartment(pt.team.id));
 
   const touchedTeamIds = new Set();
   const newTotals = {};
@@ -6218,6 +6238,7 @@ async function renderGrandTasksTab(){
         const displayFor = new Map(grandPairingOptions(g).map(o=>[o.id, o.name]));
         for(const {team, task} of g.perTeam){
           if(task.grandOverride===true) continue; // this team's copy stays fully independent
+          if(!teamFollowsDepartment(team.id)) continue; // whole team opted out of department rules
           const teamTasks = state.tasksByTeam[team.id] || [];
           const resolveNames = list=>{
             const ids = [];
@@ -8249,7 +8270,11 @@ async function departmentCoverageCandidates(originTeamId, taskName, dateISOs, ex
   const pool = (originTeam && originTeam.departmentId)
     ? teamsInDepartment(originTeam.departmentId)
     : [originTeam].filter(Boolean);
-  const teams = pool.filter(t=> o.siblingsOnly ? t.id!==originTeamId : (o.includeOrigin || t.id!==originTeamId));
+  const teams = pool
+    .filter(t=> o.siblingsOnly ? t.id!==originTeamId : (o.includeOrigin || t.id!==originTeamId))
+    // An Independent team keeps to itself in both directions: nobody borrows its people, and
+    // nobody else's work lands on it. The origin team is always allowed to cover its own.
+    .filter(t=> t.id===originTeamId || teamFollowsDepartment(t.id));
   if(teams.length===0) return [];
   const wMonday = mondayOf(new Date(dateISOs[0]+'T00:00:00'));
   const wanted = (taskName||'').trim().toLowerCase();
@@ -8275,16 +8300,24 @@ async function departmentCoverageCandidates(originTeamId, taskName, dateISOs, ex
 }
 // Kept for the Grand-views-off case: only sibling teams, and only as a last resort.
 async function findCrossTeamCoverage(originTeamId, taskName, dISO, excludeMemberId){
+  const originTeam = state.teams.find(t=>t.id===originTeamId);
+  if(originTeam && originTeam.independent === true) return null;
   const list = await departmentCoverageCandidates(originTeamId, taskName, [dISO], excludeMemberId, { siblingsOnly:true });
   return list[0] || null;
 }
-// Is this team's department set up to behave as one big team?
-function departmentActsAsOneTeam(teamId){
+// Does this team take its tasks, weekly needs and rotation from its department?
+// Two ways to say no: the department isn't combining its teams at all (Grand views off), or
+// this one team has been marked Independent — it still sits in the department for reporting
+// and still shows up in the Grand views, but department-wide rules don't reach it and its
+// people aren't part of the department's rotation pool.
+function teamFollowsDepartment(teamId){
   const team = state.teams.find(t=>t.id===teamId);
   if(!team || !team.departmentId) return false;
+  if(team.independent === true) return false;
   const dept = state.departments.find(d=>d.id===team.departmentId);
   return !!(dept && dept.showGrandViews!==false);
 }
+function departmentActsAsOneTeam(teamId){ return teamFollowsDepartment(teamId); }
 // Which "same all week" tasks in this week actually have the outgoing person on them.
 function sameAllWeekTaskIdsAffected(sched, dateISOs, memberId){
   const ids = new Set();
@@ -8436,7 +8469,7 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
     }
   }
   for(const [mid, changes] of Object.entries(instantNotify)){
-    const message = `You're now covering ${summarizeInstantCoverage(changes)} — ${outgoingName} is out of office.`;
+    const message = `You're now covering ${summarizeInstantCoverage(changes)} — ${outgoingName} is away.`;
     await createNotification(mid, 'New coverage assigned to you', message, 'ooo_coverage', changes.map(c=>({ ...c, type:'added' })));
   }
   if(replaced===0 && removed===0 && crossTeam===0){
@@ -8821,7 +8854,7 @@ async function markHolidayDays(who, reason, dates, redraw){
   await persistHolidays();
   redraw();
   showToast(`Marked ${dates.length} day${dates.length>1?'s':''} ${reason==='sick'?'as out of office':'off'} for ${memberName(who)}`);
-  if(reason==='sick') await autoReplaceForOOO(who, dates);
+  await autoReplaceForOOO(who, dates);
 }
 function offThisWeekHtml(memberIds, showTeam){
   const wk = mondayOf(new Date());
@@ -9779,7 +9812,7 @@ function drawViewerCalendar(){
       await persistHolidays();
       drawViewerCalendar();
       showToast(reason==='sick' ? 'Marked yourself as out of office' : 'Marked yourself off');
-      if(reason==='sick') await autoReplaceForOOO(viewerIdentityId, [dISO]);
+      await autoReplaceForOOO(viewerIdentityId, [dISO]);
     });
   });
 }
