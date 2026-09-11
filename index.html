@@ -1655,7 +1655,11 @@ function installDemoBackend(){
     async get(k){ return kv.has(k) ? { key: k, value: kv.get(k) } : null; },
     async set(k, value){ kv.set(k, value); return { key: k, value }; },
     async delete(k){ kv.delete(k); return { key: k, deleted: true }; },
-    async list(prefix){ return { keys: [...kv.keys()].filter(k => k.startsWith(prefix)), prefix }; }
+    async list(prefix){ return { keys: [...kv.keys()].filter(k => k.startsWith(prefix)), prefix }; },
+    async listDocs(prefix, fromKey){
+      const keys = [...kv.keys()].filter(k => k.startsWith(prefix) && (!fromKey || k >= fromKey));
+      return { docs: keys.map(k => ({ key: k, value: kv.get(k) })), prefix };
+    }
   };
 
   window.rotaAuth = {
@@ -1879,6 +1883,20 @@ window.rotaReady = (async function boot(){
       const keys = [];
       snap.forEach(d => keys.push(d.id));
       return { keys, prefix };
+    },
+    // Same query as list(), but hands back the documents instead of throwing them away.
+    // getDocs downloads the whole document either way, so a caller that wanted the contents
+    // was paying for every document twice — once here, once again per key via get().
+    // `fromKey` narrows the range, so a caller that only needs recent keys (ids sort
+    // chronologically) doesn't download all of history to discard most of it.
+    async listDocs(prefix, fromKey){
+      const col = collection(db, KV_COLLECTION);
+      const start = (fromKey && fromKey > prefix) ? fromKey : prefix;
+      const q = query(col, where(documentId(), '>=', start), where(documentId(), '<', prefix + '\uf8ff'));
+      const snap = await getDocs(q);
+      const docs = [];
+      snap.forEach(d => docs.push({ key: d.id, value: d.data().value }));
+      return { docs, prefix };
     }
   };
 })();
@@ -6415,7 +6433,8 @@ document.getElementById('btn-grand-generate').addEventListener('click', ()=>{
       if(sharedGroups.length>0){
         statusEl.textContent = 'Rotating shared tasks across the department…';
         const teamSchedules = {};
-        for(const team of teams){ teamSchedules[team.id] = await loadWeekForTeam(team.id, weekISO); }
+        (await Promise.all(teams.map(async team=> [team.id, await loadWeekForTeam(team.id, weekISO)])))
+          .forEach(([id, sched])=>{ teamSchedules[id] = sched; });
         for(const [key, g] of sharedGroups){
           const resultsByTeam = await generateSharedTaskPoolForWeek(g, dates, grandReqTotals[key], teamSchedules);
           for(const {team, task} of g.perTeam){
@@ -7011,11 +7030,15 @@ async function withBorrowedTeamContext(teamId, weekMonday, fn){
 }
 // Same idea, but for read-only lookups (like "who's eligible") rather than an actual edit —
 // skips the real-Schedule-tab redraw, since that's only meaningful after something changed.
-async function readWithBorrowedTeamContext(teamId, weekMonday, fn){
+// `preloadedSchedule` lets a caller that has already fetched this team's week hand it over
+// instead of making this re-read it. Grand Schedule calls this once per team per row purely to
+// work out the "+" dropdown's options, so without it a 12-task, 3-team department re-fetched
+// the same 3 documents 36 times to render one screen.
+async function readWithBorrowedTeamContext(teamId, weekMonday, fn, preloadedSchedule){
   const realTeamId = currentTeamId, realWeekMonday = currentWeekMonday, realSchedule = currentSchedule;
   currentTeamId = teamId;
   currentWeekMonday = weekMonday;
-  currentSchedule = await loadWeek(iso(weekMonday));
+  currentSchedule = preloadedSchedule || await loadWeek(iso(weekMonday));
   try{
     return await fn();
   } finally {
@@ -7041,11 +7064,17 @@ function departmentMemberIds(deptId){
   const teamIds = new Set(teamsInDepartment(deptId).map(t=>t.id));
   return state.members.filter(m=>teamIds.has(m.teamId)).map(m=>m.id);
 }
-async function buildGrandScheduleRowHtml(key, g, dates, weekISO){
+async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
   const rowTeams = g.perTeam.map(pt=>pt.team);
   const rowTeamData = {};
-  for(const team of rowTeams){
-    rowTeamData[team.id] = { sched: await loadWeekForTeam(team.id, weekISO) };
+  // `preloaded` is the whole department's week, fetched once by the caller. Without it (a
+  // single row being refreshed in place after an edit) fall back to fetching this row's teams,
+  // now at least in parallel rather than one after another.
+  if(preloaded){
+    rowTeams.forEach(team=>{ rowTeamData[team.id] = { sched: preloaded[team.id] || {} }; });
+  } else {
+    const fetched = await Promise.all(rowTeams.map(team=> loadWeekForTeam(team.id, weekISO)));
+    rowTeams.forEach((team,i)=>{ rowTeamData[team.id] = { sched: fetched[i] }; });
   }
   let html = `<tr data-gkey="${escAttr(key)}"><td class="taskname" title="${escAttr(g.displayName)}"><div class="taskname-inner"><span class="taskname-text">${escHtml(g.displayName)}</span></div></td>`;
 
@@ -7139,7 +7168,7 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO){
     let combinedOptions = [];
     for(const {team, task} of g.perTeam){
       const assigned = ((rowTeamData[team.id].sched[primaryDate]||{})[task.id]) || [];
-      const opts = await readWithBorrowedTeamContext(team.id, grandWeekMonday, async ()=> eligibleMembersForRun(task.id, runDates, assigned));
+      const opts = await readWithBorrowedTeamContext(team.id, grandWeekMonday, async ()=> eligibleMembersForRun(task.id, runDates, assigned), rowTeamData[team.id].sched);
       opts.forEach(m=> combinedOptions.push({ member:m, team, task }));
     }
     const showTeamInLabel = g.perTeam.length>1;
@@ -7295,6 +7324,12 @@ async function renderGrandScheduleGrid(){
   const names = Object.keys(groups).sort();
   if(names.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No tasks yet in this department's teams.</div>`; return; }
 
+  // One fetch per team for this week, up front and in parallel — every row then reads from
+  // this instead of fetching the same documents again for itself.
+  const weekByTeam = {};
+  (await Promise.all(teams.map(async t=> [t.id, await loadWeekForTeam(t.id, weekISO)])))
+    .forEach(([id, sched])=>{ weekByTeam[id] = sched; });
+
   let html = '<table class="sched-table"><thead><tr><th style="text-align:left;">Task</th>';
   const grandBdayPool = state.members.filter(m=> teamsInDepartment(currentDepartmentId).some(t=>t.id===m.teamId));
   DAYS.forEach((d,i)=>{
@@ -7304,9 +7339,8 @@ async function renderGrandScheduleGrid(){
     html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}${bdayNames.length?`<span class="bday-indicator" title="${escAttr(bdayNames.join(', '))}">🎂 ${escHtml(bdayNames.join(', '))}</span>`:''}</div></th>`;
   });
   html += '</tr></thead><tbody>';
-  for(const key of names){
-    html += await buildGrandScheduleRowHtml(key, groups[key], dates, weekISO);
-  }
+  const rowsHtml = await Promise.all(names.map(key=> buildGrandScheduleRowHtml(key, groups[key], dates, weekISO, weekByTeam)));
+  html += rowsHtml.join('');
   html += '</tbody></table>';
   wrap.innerHTML = html;
   enhanceSelectsIn(wrap);
@@ -7362,25 +7396,25 @@ async function computeBalance(){
 async function computeBalanceForTeam(teamId){
   const prefix = 'schedule_'+teamId+'_';
   const schedules = state.schedulesByTeam[teamId] = state.schedulesByTeam[teamId] || {};
-  try{
-    const list = await window.storage.list(prefix, true);
-    if(list && list.keys){
-      const missing = list.keys.filter(k => !Object.prototype.hasOwnProperty.call(schedules, k.slice(prefix.length)));
-      await Promise.all(missing.map(async k=>{
-        const weekISO = k.slice(prefix.length);
-        try{
-          const res = await window.storage.get(k, true);
-          if(res) schedules[weekISO] = JSON.parse(res.value);
-        }catch(e){}
-      }));
-    }
-  }catch(e){}
   // Only count the last N weeks — an all-time tally means a new hire (0 forever-ago-to-now)
   // or someone back from a few weeks of holiday (artificially "underdue") gets over-prioritized
   // in a catch-up burst. A rolling window bounds that gap to the window size instead of letting
   // it grow unbounded, which is really just a more honest definition of "fair rotation" —
   // recent balance, not a lifetime total that old data quietly keeps influencing.
   const cutoff = addDays(mondayOf(new Date()), -7*BALANCE_WINDOW_WEEKS);
+  // Fetch only that window, and in one query. This used to list every schedule this team had
+  // ever saved — which downloads each document in full — and then fetch each one AGAIN
+  // individually, so a team with a year of history cost ~104 document reads to use 8 weeks.
+  // Week keys end in YYYY-MM-DD, so they sort chronologically and the cutoff is a range start.
+  try{
+    const fromKey = prefix + iso(cutoff);
+    const listing = await window.storage.listDocs(prefix, fromKey);
+    (listing && listing.docs || []).forEach(d=>{
+      const weekISO = d.key.slice(prefix.length);
+      if(Object.prototype.hasOwnProperty.call(schedules, weekISO)) return; // already in memory
+      try{ schedules[weekISO] = JSON.parse(d.value); }catch(e){}
+    });
+  }catch(e){ console.error('Could not load recent schedules for balance', teamId, e); }
   const balance = {};
   Object.entries(schedules).forEach(([weekISO, weekSched])=>{
     if(new Date(weekISO+'T00:00:00') < cutoff) return;
@@ -8432,8 +8466,10 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
       const allTeamIdsInvolved = new Set();
       sharedGroups.forEach(([key,g])=> g.perTeam.forEach(pt=> allTeamIdsInvolved.add(pt.team.id)));
       const teamSchedules = {};
+      (await Promise.all([...allTeamIdsInvolved].map(async tid=>
+        [tid, tid===currentTeamId ? sched : await loadWeekForTeam(tid, weekISO)])))
+        .forEach(([tid, s])=>{ teamSchedules[tid] = s; });
       for(const tid of allTeamIdsInvolved){
-        teamSchedules[tid] = tid===currentTeamId ? sched : await loadWeekForTeam(tid, weekISO);
         if(!snapshots[tid]) snapshots[tid] = JSON.parse(JSON.stringify(teamSchedules[tid]));
       }
       for(const [key, g] of sharedGroups){
@@ -9299,11 +9335,9 @@ async function renderWhosOnTab(){
   const dates = DAYS.map((d,i)=> iso(addDays(whosOnWeekMonday,i)));
   const weekISO = iso(whosOnWeekMonday);
   const teamData = {};
-  for(const key of names){
-    for(const {team} of groups[key].perTeam){
-      if(!teamData[team.id]) teamData[team.id] = await loadWeekForTeam(team.id, weekISO);
-    }
-  }
+  const whosOnTeamIds = [...new Set(names.flatMap(key=> groups[key].perTeam.map(pt=>pt.team.id)))];
+  (await Promise.all(whosOnTeamIds.map(async id=> [id, await loadWeekForTeam(id, weekISO)])))
+    .forEach(([id, sched])=>{ teamData[id] = sched; });
   const scopeIds = whosOnScopeTeams().flatMap(t=> state.members.filter(m=>m.teamId===t.id).map(m=>m.id));
   let html = '<table class="sched-table"><thead><tr><th style="text-align:left;">Task</th>';
   DAYS.forEach((d,i)=>{
@@ -9519,7 +9553,8 @@ async function renderViewerGrandScheduleTab(){
   // team that has it, rather than a separate section per team. Load each team's actual week
   // once, up front, so every row can reuse it instead of re-fetching per row.
   const scheds = {};
-  for(const team of teamsToShow){ scheds[team.id] = await loadWeekForTeam(team.id, weekISO); }
+  (await Promise.all(teamsToShow.map(async team=> [team.id, await loadWeekForTeam(team.id, weekISO)])))
+    .forEach(([id, sched])=>{ scheds[id] = sched; });
   const groups = {};
   teamsToShow.forEach(team=>{
     (state.tasksByTeam[team.id]||[]).forEach(task=>{
