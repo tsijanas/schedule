@@ -175,7 +175,6 @@
   td{ padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
   tr:last-child td{ border-bottom:none; }
   tr:hover td{ background:rgba(192,147,42,0.05); }
-  .lvl-pill{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; font-family:'IBM Plex Mono',monospace; }
 
   .req-table th:not(:first-child), .req-table td:not(:first-child){ text-align:center; }
   .req-table .req-total-row td{ border-top:2px solid var(--line); background:rgba(192,147,42,0.06); }
@@ -283,7 +282,6 @@
   }
   .bar:hover{ filter:brightness(1.06); }
   .bar .bar-name{ display:flex; align-items:center; justify-content:center; gap:5px; flex:1 1 auto; min-width:0; }
-  .team-dot{ width:7px; height:7px; border-radius:50%; border:1.5px solid; flex-shrink:0; }
   .bar .bar-name-text{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bar .bar-name-text.pending{ font-size:11px; opacity:0.85; }
   .bar.short{ box-shadow: inset 0 0 0 2px rgba(255,255,255,0.7); }
@@ -344,7 +342,6 @@
     transition:background 0.12s ease;
   }
   .btn-remove-x:hover{ background:var(--brick); color:#fff; }
-  .row-actions{ display:flex; gap:6px; align-items:center; }
   .cell-daterange{ font-size:10.5px; font-weight:600; display:inline-block; padding:1px 8px; border-radius:8px; background:var(--sage-soft); color:var(--ink); }
   .cell-shortfall{ font-size:10.5px; font-weight:700; display:inline-block; padding:1px 8px; border-radius:8px; background:var(--brick-soft); color:var(--brick-text); }
   th.bank-hol-col{ background:var(--gold-soft) !important; }
@@ -373,9 +370,7 @@
   .add-select select:hover, .add-select .fsel-trigger:hover{ border-color:var(--gold); color:var(--ink); }
 
   .member-card, .task-card{ border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:12px; background:var(--paper); }
-  .member-card-head, .task-card-head{ display:flex; align-items:center; gap:10px; margin-bottom:14px; }
   .member-card-head .m-name, .task-card-head .task-name{ flex:1; font-weight:700; font-size:14.5px; min-width:0; }
-  .member-card-body, .task-card-body{ display:none; margin-top:14px; }
   .member-card.expanded .member-card-body, .task-card.expanded .task-card-body{ display:block; }
   .card-expand-toggle{
     background:none; border:none; cursor:pointer; color:var(--ink-soft);
@@ -387,23 +382,17 @@
   .member-card.expanded .card-expand-toggle, .task-card.expanded .card-expand-toggle{ transform:rotate(90deg); }
   .member-card-summary, .task-card-summary{ display:flex; align-items:center; gap:6px; flex-shrink:0; flex-wrap:wrap; }
   .member-card.expanded .member-card-summary, .task-card.expanded .task-card-summary{ display:none; }
-  .member-card-grid, .task-card-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:14px; margin-bottom:14px; }
-  .member-3col{ display:grid; grid-template-columns:repeat(3, 1fr); gap:22px; align-items:start; }
-  .m-col-label{ font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; color:var(--ink-faint); margin-bottom:10px; }
   .m-col .field{ margin-bottom:12px; }
   @media (max-width: 900px){ .member-3col{ grid-template-columns:1fr; } }
   .field label{ display:block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); margin-bottom:5px; }
   .m-level-cell{ display:flex; flex-wrap:wrap; gap:8px 12px; padding-top:4px; }
   .member-card-tasks > label{ display:block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); margin-bottom:7px; }
-  .task-elig-grid{ display:flex; flex-wrap:wrap; gap:7px; }
-  .task-elig-chip{
     display:inline-flex; align-items:center; gap:6px; padding:5px 12px 5px 6px; border-radius:20px;
     border:1.5px solid var(--line); font-size:12px; font-weight:600; color:var(--ink-soft); background:#fff; cursor:pointer;
   }
   .field-error{ display:none; color:var(--brick-text); font-size:11px; font-weight:600; margin-top:5px; }
   .field-error.show{ display:block; }
   .link-inline{ background:none; border:none; padding:0; color:var(--brick-text); font-size:11px; font-weight:700; text-decoration:underline; cursor:pointer; }
-  .pending-match-banner{
     display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; color:var(--brick-text);
     background:var(--brick-soft); border:1px solid var(--brick); border-radius:8px; padding:8px 12px; margin:8px 0 0 0;
   }
@@ -426,12 +415,9 @@
   .notif-row-message{ font-size:12.5px; color:var(--ink-soft); line-height:1.5; }
   .notif-row.unread .notif-row-message{ color:var(--ink); font-weight:600; }
   .notif-row-time{ font-size:10.5px; color:var(--ink-faint); margin-top:4px; }
-  .admin-toggle-row{
     display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:2px 0 14px 0;
     padding:9px 12px; border-radius:10px; background:var(--brick-soft); border:1px solid var(--brick);
   }
-  .admin-toggle{ display:flex; align-items:center; gap:7px; font-size:12.5px; font-weight:700; color:var(--brick-text); cursor:pointer; }
-  .admin-toggle input{ width:15px; height:15px; accent-color:var(--brick-text); }
   .select-all-label{ display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--ink-soft); cursor:pointer; }
   .select-all-label input{ width:15px; height:15px; }
   .btn-remove-x-wide{
@@ -3675,7 +3661,6 @@ function applyRegistryFilters(){
         const removed = await removePersonEntirely(mid);
         if(!removed) return;
         applyRegistryFilters();
-        renderTeamsList();
         undoRemovePerson(removed);
         showToast(`Removed ${removed.member.name || removed.contact.email}`, undoLast);
       });
@@ -3811,7 +3796,7 @@ function undoRemovePerson(removed){
     await persistHolidays();
     await saveContact(removed.mid, removed.contact.email, removed.contact.authUid);
     await restoreMemberAccess(removed.contact.authUid, removed.wasManager, removed.mid);
-    renderTeamTab(); renderTeamsList();
+    renderTeamTab();
     showToast('Restored');
   });
 }
@@ -3914,9 +3899,7 @@ function teamOptionsForDept(deptId, selectedTeamId){
 function renderTeamTab(){
   renderInvitesCard();
   const me = currentViewerMember();
-  const deptHint = document.getElementById('team-dept-hint');
   const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
-  if(deptHint) deptHint.style.display = isOrgAdmin ? 'block' : 'none';
   const wrap = document.getElementById('team-table-wrap');
   const label = document.getElementById('people-team-label');
   if(label){ const t = currentTeam(); label.textContent = t ? `— viewing ${t.name}` : ''; }
@@ -4096,7 +4079,6 @@ function renderTeamTab(){
           const ok = await mergeMembers(keepId, absorbId);
           if(ok){ showToast('Merged into one person'); } else { showToast("Couldn't merge — one of these records may already be gone; try refreshing"); }
           renderTeamTab();
-          renderTeamsList();
         });
       });
       return true;
@@ -4132,7 +4114,6 @@ function renderTeamTab(){
           const ok = await mergeMembers(keepId, absorbId);
           if(ok){ showToast('Merged into one person'); } else { showToast("Couldn't merge — one of these records may already be gone; try refreshing"); }
           renderTeamTab();
-          renderTeamsList();
         });
       });
       return true;
@@ -4247,7 +4228,6 @@ function renderTeamTab(){
       }
       if(ok){ showToast(`Saved ${cards.length} ${cards.length===1?'person':'people'}`); logAudit('member.save_all', { count: cards.length, teamId: currentTeamId }); }
       renderTeamTab();
-      renderTeamsList();
     });
   }
 
@@ -4299,11 +4279,10 @@ function renderTeamTab(){
             await saveContact(r.id, r.contact.email, r.contact.authUid);
             await restoreMemberAccess(r.contact.authUid, r.wasManager, r.id);
           }
-          renderTeamTab(); renderTeamsList();
+          renderTeamTab();
           showToast('Restored');
         });
         showToast(`Removed ${ids.length} ${ids.length===1?'person':'people'}`, undoLast);
-        renderTeamsList();
       });
     });
   }
@@ -4380,7 +4359,6 @@ document.getElementById('bulk-import-confirm').addEventListener('click', async (
       logAudit('member.bulk_add', { count: rows.length, teamId: currentTeamId, role: role||'viewer' });
     }
     renderTeamTab();
-    renderTeamsList();
   } else {
     rows.forEach(row=>{
       const task = { id:'task_'+Math.random().toString(36).slice(2,9), name:row.name, levels: LEVELS.includes(row.level)?[row.level]:[], excludes:null, sameAllWeek:false, notes:'' };
@@ -4559,7 +4537,6 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
     state.members = state.members.filter(m=>!createdIds.has(m.id));
   }
   if(teamId===currentTeamId){ renderTeamTab(); } else { renderInvitesCard(); }
-  renderTeamsList();
 });
 document.getElementById('btn-bulk-add-task').addEventListener('click', ()=> openBulkImport('tasks'));
 
@@ -4568,8 +4545,14 @@ document.getElementById('btn-bulk-add-task').addEventListener('click', ()=> open
 // produced records with no email and no way to sign in.
 // Saving is consolidated to one "Save changes" button at the top of the People card now
 // (see renderTeamTab's btn-save-all-members handler) — no per-row save buttons anymore.
-function escAttr(s){ return String(s).replace(/"/g,'&quot;'); }
-function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+const HTML_ESCAPES = { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' };
+function escapeAll(s){ return String(s).replace(/[&<>"']/g, c=> HTML_ESCAPES[c]); }
+// Both contexts get the full escape set. They used to differ — escAttr handled only double
+// quotes, escHtml only & and < — so a value escaped for one context and then used in the
+// other could break out of it. Keeping two names is worth it for readability at the call
+// site; the behaviour is deliberately identical.
+function escAttr(s){ return escapeAll(s); }
+function escHtml(s){ return escapeAll(s); }
 
 // ================= TEAM SWITCHER (sidebar, always visible) =================
 // Deterministic string→color mapping shared by team and task colors — same input always
@@ -4708,7 +4691,6 @@ document.getElementById('dept-switch-select').addEventListener('change', (e)=>{
   currentDepartmentId = e.target.value;
   const teamsHere = teamsInDepartment(currentDepartmentId);
   if(teamsHere.length>0) switchTeam(teamsHere[0].id); else renderTeamSwitcher();
-  renderTeamsList();
   renderDeptTeamsCard(); // this tab is scoped to the selected department
 });
 document.getElementById('team-switch-select').addEventListener('change', (e)=>{ switchTeam(e.target.value); });
@@ -4767,7 +4749,6 @@ async function removeTeamEntirely(teamId){
     const ok = await safeSet('teams', state.teams);
     if(ok) logAudit('team.remove', { name: team.name });
     if(currentTeamId===teamId) await switchTeam(state.teams[0].id);
-    renderTeamsList();
     renderTeamSwitcher();
     renderDeptTeamsCard();
     renderDeptSetupCard(); // its per-department summary line names each team
@@ -4778,100 +4759,10 @@ async function removeTeamEntirely(teamId){
       await safeSet('teams', state.teams, true);
       await safeSet('tasks_'+teamId, tasksSnapshot, true);
       await safeSet('weekly_req_'+teamId, reqSnapshot, true);
-      renderTeamsList(); renderTeamSwitcher(); renderDeptTeamsCard(); renderDeptSetupCard();
+      renderTeamSwitcher(); renderDeptTeamsCard(); renderDeptSetupCard();
       showToast('Restored');
     });
     if(ok) showToast('Team removed', undoLast);
-  });
-}
-function renderTeamsList(){
-  const wrap = document.getElementById('teams-list');
-  if(!wrap) return; // this section moved to Departments — safe no-op for any remaining callers
-  const scopeToCurrentDept = state.departments.length > 0 && currentDepartmentId;
-  const teamLeadOptions = scopeToCurrentDept
-    ? (()=>{
-        const idsInDept = new Set(state.teams
-          .filter(t=> currentDepartmentId==='__ungrouped__' ? !t.departmentId : t.departmentId===currentDepartmentId)
-          .map(t=>t.id));
-        return state.members.filter(m=>idsInDept.has(m.teamId));
-      })()
-    : state.members;
-  let html = '';
-  state.teams.forEach((t,ti)=>{
-    if(scopeToCurrentDept){
-      const inScope = currentDepartmentId==='__ungrouped__' ? !t.departmentId : t.departmentId===currentDepartmentId;
-      if(!inScope) return; // real array index (ti) stays correct for the rows that do render
-    }
-    const count = state.members.filter(m=>m.teamId===t.id).length;
-    const tc = colorForTeam(t.id);
-    html += `<div class="team-row" data-ti="${ti}">
-      <div class="team-color-picker-wrap">
-        <button type="button" class="team-color-dot" data-ti="${ti}" style="background:${tc.bg};" title="Click to change this team's color"></button>
-        <div class="team-color-swatches">
-          ${lightPaletteForPicker().map((c,ci)=>`<button type="button" class="team-color-swatch ${t.colorIndex===ci?'selected':''}" data-ti="${ti}" data-ci="${ci}" style="background:${c.bg};"></button>`).join('')}
-        </div>
-      </div>
-      <input type="text" class="team-name" value="${escAttr(t.name)}" placeholder="Team name">
-      <select class="team-manager">
-        <option value="">— no manager set —</option>
-        ${teamLeadOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
-      </select>
-      <span class="muted" style="font-size:12px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
-      <div class="spacer"></div>
-      <button class="btn secondary small btn-duplicate-team" title="Create a new team with the same tasks and weekly needs">Duplicate</button>
-      <button class="btn secondary small btn-del-team">Remove</button>
-    </div>`;
-  });
-  wrap.innerHTML = html;
-  enhanceSelectsIn(wrap);
-  wrap.querySelectorAll('.team-color-dot').forEach(btn=>{
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      const swatches = btn.nextElementSibling;
-      const wasOpen = swatches.classList.contains('open');
-      wrap.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
-      if(!wasOpen) swatches.classList.add('open');
-    });
-  });
-  wrap.querySelectorAll('.team-color-swatch').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      e.stopPropagation();
-      const ti = +btn.dataset.ti;
-      const ci = +btn.dataset.ci;
-      state.teams[ti].colorIndex = ci;
-      const ok = await safeSet('teams', state.teams);
-      if(ok){ logAudit('team.color_change', { name: state.teams[ti].name }); }
-      renderTeamsList();
-      renderTeamSwitcher();
-      applyTeamAccent();
-    });
-  });
-  wrap.querySelectorAll('.btn-duplicate-team').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const row = btn.closest('[data-ti]');
-      const ti = +row.dataset.ti;
-      const source = state.teams[ti];
-      const newId = 'team_'+Math.random().toString(36).slice(2,9);
-      state.teams.splice(ti+1, 0, { id:newId, name:`${source.name} (copy)`, managerId:null, departmentId:source.departmentId||null });
-      state.tasksByTeam[newId] = JSON.parse(JSON.stringify(state.tasksByTeam[source.id]||[]));
-      state.reqByTeam[newId] = JSON.parse(JSON.stringify(state.reqByTeam[source.id]||{}));
-      const ok = await safeSet('teams', state.teams);
-      if(ok){
-        await safeSet('tasks_'+newId, state.tasksByTeam[newId], true);
-        await safeSet('weekly_req_'+newId, state.reqByTeam[newId], true);
-        logAudit('team.duplicate', { from: source.name, to: `${source.name} (copy)` });
-        showToast(`Duplicated ${source.name} — same tasks and weekly needs, no people yet`);
-      }
-      renderTeamsList();
-      renderTeamSwitcher();
-    });
-  });
-  wrap.querySelectorAll('.btn-del-team').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const row = btn.closest('[data-ti]');
-      const team = state.teams[+row.dataset.ti];
-      if(team) removeTeamEntirely(team.id);
-    });
   });
 }
 
@@ -4914,7 +4805,6 @@ async function renderUnassignedList(){
       const ok = await persistMembers();
       if(ok){ showToast('Assigned to team'); logAudit('member.assign_team', { name: m&&m.name, teamId }); }
       await renderUnassignedList();
-      renderTeamsList();
       if(teamId===currentTeamId) renderTeamTab();
     });
   });
@@ -5001,7 +4891,7 @@ function multiSelectDropdownHtml(fieldClass, options, selectedIds){
     : `${selectedNames.length} selected`;
   const optionsHtml = options.length===0
     ? `<div class="ms-empty">No other tasks yet.</div>`
-    : options.map(o=>`<label><input type="checkbox" value="${o.id}" ${selected.has(o.id)?'checked':''}> ${escHtml(o.name)}</label>`).join('');
+    : options.map(o=>`<label><input type="checkbox" value="${escAttr(o.id)}" ${selected.has(o.id)?'checked':''}> ${escHtml(o.name)}</label>`).join('');
   return `<div class="ms-dropdown ${fieldClass}">
     <div class="ms-dropdown-trigger"><span class="ms-summary">${escHtml(summary)}</span><span class="ms-arrow">▾</span></div>
     <div class="ms-dropdown-menu">${optionsHtml}</div>
@@ -6925,7 +6815,6 @@ document.getElementById('roster-import-confirm').addEventListener('click', async
     } else {
       document.getElementById('roster-import-emails-wrap').style.display = 'none';
     }
-    renderTeamsList();
     renderTeamSwitcher();
     if(document.getElementById('tab-org')?.classList.contains('active')) renderTeamTab();
   } else {
