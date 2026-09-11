@@ -514,6 +514,15 @@
   .fsel-opt.active{ background:rgba(0,0,0,0.09); }
   .fsel-opt:disabled{ opacity:0.45; cursor:default; }
   .team-row{ display:flex; gap:10px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  /* Team rows on Department -> Teams. The name is the field that should absorb spare width,
+     but .fsel (the enhanced-select wrapper) defaults to width:100%, which otherwise collapses
+     the name box to a few pixels and leaves the row looking like it has no name field at all. */
+  .dept-team-row .fsel{ width:auto; }
+  .dept-team-row select, .dept-team-row .fsel-trigger{ max-width:190px; }
+  .dept-team-row .dept-team-name-edit{ flex:1 1 140px; min-width:110px; }
+  .dept-team-row .dept-team-name-edit:hover, .dept-team-row .dept-team-name-edit:focus{
+    background:var(--paper); outline:1px solid var(--line); outline-offset:0;
+  }
   .team-color-picker-wrap{ position:relative; flex-shrink:0; }
   .team-color-dot{ width:16px; height:16px; border-radius:50%; border:1.5px solid rgba(0,0,0,0.15); cursor:pointer; padding:0; }
   .team-color-swatches{ display:none; position:absolute; top:22px; left:0; z-index:20; background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); padding:8px; gap:6px; grid-template-columns:repeat(4, 1fr); }
@@ -635,9 +644,14 @@
       </div>
     </div>
 
+    <div class="sidebar-panel admin-only" id="org-nav-box" style="display:none;">
+      <div class="sidebar-section-label sidebar-title-label">Organisation</div>
+      <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
+    </div>
+
     <div class="sidebar-panel admin-only" id="grand-nav-box" style="display:none;">
       <div class="sidebar-section-label sidebar-title-label">Department</div>
-      <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
+      <button class="nav-item admin-only" data-tab="dept-teams" id="nav-dept-teams">Teams</button>
       <button class="nav-item admin-only" data-tab="grand-tasks" id="nav-grand-tasks">Tasks</button>
       <button class="nav-item admin-only" data-tab="grand-req" id="nav-grand-req">Requirement</button>
       <button class="nav-item admin-only" data-tab="grand" id="nav-grand">Schedule</button>
@@ -654,7 +668,7 @@
       <div class="sidebar-section-label team-section-label sidebar-title-label admin-only">Team</div>
       <button class="nav-item admin-only active" data-tab="tasks">Tasks</button>
       <button class="nav-item admin-only" data-tab="requirements">Requirement</button>
-      <button class="nav-item admin-only" data-tab="org">Teams &amp; People</button>
+      <button class="nav-item admin-only" data-tab="org">People</button>
       <button class="nav-item admin-only" data-tab="schedule">Schedule</button>
       <button class="nav-item admin-only" data-tab="holidays">Holidays</button>
       <button type="button" class="admin-only nav-submenu-toggle" id="toggle-team-insights" aria-expanded="false">
@@ -684,11 +698,11 @@
       <div id="storage-banner-detail" class="mono" style="font-size:11px; opacity:0.85; margin-top:4px;"></div></div>
     </div>
 
-    <!-- TEAMS & PEOPLE TAB -->
+    <!-- PEOPLE TAB -->
     <div class="tab-panel active" id="tab-org">
       <div class="page-head">
-        <h1>Teams &amp; People</h1>
-        <p>Add people, assign them to this team, and set which tasks they can work. This is the source of truth the scheduler reads from. Create or edit teams themselves from the Departments tab.</p>
+        <h1>People</h1>
+        <p>Add people, assign them to this team, and set which tasks they can work. This is the source of truth the scheduler reads from. The teams themselves are set up under Department &rarr; Teams.</p>
       </div>
       <div class="card" id="invites-card" style="display:none;">
         <h3>Invites <span class="muted" style="font-weight:400; font-size:12px;" id="invites-team-label"></span></h3>
@@ -787,7 +801,7 @@
         <div id="onboarding-setup-content" style="display:none;">
           <h3 style="margin-top:0;">Set up this team first</h3>
           <p class="muted" style="font-size:12.5px; line-height:1.7; margin:0;">
-            Nothing to schedule yet — start with <strong>Tasks</strong> (what needs covering), then <strong>Team &amp; People</strong> (who's on the team). Tasks first matters: eligibility for each person defaults off what tasks already exist, so adding people before tasks means going back to set it manually.
+            Nothing to schedule yet — start with <strong>Tasks</strong> (what needs covering), then <strong>People</strong> (who's on the team). Tasks first matters: eligibility for each person defaults off what tasks already exist, so adding people before tasks means going back to set it manually.
           </p>
         </div>
         <div id="onboarding-loop-content">
@@ -1148,10 +1162,21 @@
     <div class="tab-panel" id="tab-departments">
       <div class="page-head">
         <h1>Departments</h1>
-        <p>Groups several teams together, with an optional combined Grand Schedule, Requirement, Balance, and Registry.</p>
+        <p>The organisation-wide view: every department, and whether each one combines its teams into a Grand Schedule, Requirement, Balance, and Registry. Admin only. The teams inside a department are set up under Department &rarr; Teams.</p>
       </div>
       <div class="card" id="dept-setup-card">
         <div id="dept-setup-body"></div>
+      </div>
+    </div>
+
+    <!-- DEPARTMENT → TEAMS TAB -->
+    <div class="tab-panel" id="tab-dept-teams">
+      <div class="page-head">
+        <h1>Teams <span class="muted" style="font-weight:400; font-size:14px;" id="dept-teams-scope-label"></span></h1>
+        <p>The teams in this department — name, colour, manager, and which department each belongs to. Add people to a team under Team &rarr; People.</p>
+      </div>
+      <div class="card" id="dept-teams-card">
+        <div id="dept-teams-body"></div>
       </div>
     </div>
 
@@ -1185,7 +1210,7 @@
       </div>
       <div class="card">
         <h3>Import team roster</h3>
-        <div class="hint">Paste a roster sheet — name, level, team, email, then one column per task with a checked/unchecked value per person — and it sets up the teams, people, tasks, and per-person eligibility all at once. Include the header row; task names come from it. This only creates and updates data — it never deletes anyone or removes anyone's access, and it never sends invites (do that separately from Team &amp; People once you're ready).</div>
+        <div class="hint">Paste a roster sheet — name, level, team, email, then one column per task with a checked/unchecked value per person — and it sets up the teams, people, tasks, and per-person eligibility all at once. Include the header row; task names come from it. This only creates and updates data — it never deletes anyone or removes anyone's access, and it never sends invites (do that separately from People once you're ready).</div>
         <div class="row" style="margin-top:10px;">
           <button class="btn small" id="btn-open-roster-import">Import a roster</button>
         </div>
@@ -2189,82 +2214,62 @@ document.getElementById('btn-refresh-audit').addEventListener('click', renderAud
 // This is a deliberate, reviewable action a person triggers and confirms, never something
 // that runs automatically on load — the one part of this whole feature that's genuinely
 // hard to fully undo, so it doesn't get to happen silently.
+// Who may change team setup: an org Admin anywhere, a Manager only inside the department they
+// were assigned to. Anyone else gets the same screens read-only.
+function isOrgAdminViewer(){
+  const me = currentViewerMember();
+  return !!(me && (me.role==='admin' || me.isAdmin===true));
+}
+function canEditTeamsInDept(deptId){
+  const me = currentViewerMember();
+  if(!me) return false;
+  if(isOrgAdminViewer()) return true;
+  return me.role==='manager' && !!deptId && deptId!=='__ungrouped__' && me.managerDeptId===deptId;
+}
+
+// ===== DEPARTMENTS TAB — the organisation-wide list, Admin only =====
+// Deliberately carries no team rows any more: teams live on the Department -> Teams tab, which
+// a Manager can also reach for their own department. Keeping the two screens apart is what
+// lets "every department in the org" stay a purely Admin-level view.
 function renderDeptSetupCard(){
   const wrap = document.getElementById('dept-setup-body');
   if(!wrap) return;
-  const me = currentViewerMember();
-  const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
-
   const teamsIn = dept=> state.teams.filter(t=>t.departmentId===dept.id);
+  const teamSummary = dept=>{
+    const ts = teamsIn(dept);
+    if(ts.length===0) return 'No teams yet.';
+    return `${ts.length} ${ts.length===1?'team':'teams'} — ${ts.map(t=>escHtml(t.name)).join(', ')}`;
+  };
 
-  if(!isOrgAdmin){
-    const listHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
+  if(!isOrgAdminViewer()){
+    const roHtml = state.departments.map(dept=> `<div style="border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px;">
       <div style="font-weight:700; font-size:13.5px; margin-bottom:4px;">${escHtml(dept.name)}</div>
-      <div class="muted" style="font-size:12px;">${teamsIn(dept).length===0 ? 'No teams yet.' : teamsIn(dept).map(t=>escHtml(t.name)).join(', ')}</div>
+      <div class="muted" style="font-size:12px;">${teamSummary(dept)}</div>
     </div>`).join('');
-    wrap.innerHTML = listHtml || `<div class="muted" style="font-size:12.5px;">No departments yet.</div>`
-      + `<div class="muted" style="font-size:11.5px; margin-top:8px;">Admin-only to create/edit departments. Teams within yours: use Team &amp; People.</div>`;
+    wrap.innerHTML = (roHtml || `<div class="muted" style="font-size:12.5px;">No departments yet.</div>`)
+      + `<div class="muted" style="font-size:11.5px; margin-top:8px;">Only an Admin can create or edit departments. To set up the teams inside your own department, use Department &rarr; Teams.</div>`;
     return;
   }
-
-  const moveSelectHtml = (currentDeptId, teamId)=>{
-    const opts = state.departments.map(d=>`<option value="${d.id}" ${d.id===currentDeptId?'selected':''}>${escHtml(d.name)}</option>`).join('');
-    return `<label style="font-size:11px; color:var(--ink-soft); display:flex; align-items:center; gap:5px; flex-shrink:0;">Move to: <select class="dept-team-move-select" data-team="${teamId}">${opts}</select></label>`;
-  };
-
-  // Manager options are scoped to just this department's own members — the same person can't
-  // manage a team in a department they're not even part of.
-  const managerOptionsFor = dept=>{
-    const idsInDept = new Set(teamsIn(dept).map(t=>t.id));
-    return state.members.filter(m=>idsInDept.has(m.teamId));
-  };
-
-  const teamRowHtml = (dept, t)=> {
-    const tc = colorForTeam(t.id);
-    const count = state.members.filter(m=>m.teamId===t.id).length;
-    const managerOptions = dept ? managerOptionsFor(dept) : [];
-    return `<div class="dept-team-row" data-team="${t.id}" style="display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px;">
-    <div class="team-color-picker-wrap">
-      <button type="button" class="team-color-dot" data-team="${t.id}" style="background:${tc.bg};" title="Click to change this team's color"></button>
-      <div class="team-color-swatches">
-        ${lightPaletteForPicker().map((c,ci)=>`<button type="button" class="team-color-swatch ${t.colorIndex===ci?'selected':''}" data-team="${t.id}" data-ci="${ci}" style="background:${c.bg};"></button>`).join('')}
-      </div>
-    </div>
-    <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
-    <select class="dept-team-manager-edit" data-team="${t.id}">
-      <option value="">— no manager set —</option>
-      ${managerOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
-    </select>
-    <span class="muted" style="font-size:11.5px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
-    ${moveSelectHtml(dept ? dept.id : '__none__', t.id)}
-    <button type="button" class="btn secondary small dept-team-duplicate-btn" data-team="${t.id}" title="Create a new team with the same tasks and weekly needs">Duplicate</button>
-    <button type="button" class="btn-remove-x dept-team-remove-btn" data-team="${t.id}" title="Remove team">×</button>
-  </div>`;
-  };
 
   const listHtml = state.departments.map(dept=> `<div class="dept-card" data-dept="${dept.id}" style="border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px;">
     <input type="text" class="dept-name-edit" data-dept="${dept.id}" value="${escAttr(dept.name)}" style="font-weight:700; font-size:14px; border:none; background:none; padding:0; width:100%; margin-bottom:8px;">
     <label class="chip-check" style="display:inline-flex; margin-bottom:10px;"><input type="checkbox" class="dept-grand-views-edit" data-dept="${dept.id}" ${dept.showGrandViews!==false?'checked':''}> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
-    <div style="font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:4px;">Teams</div>
-    ${teamsIn(dept).length===0
-      ? `<div class="muted" style="font-size:12px; margin-bottom:8px;">No teams yet.</div>`
-      : teamsIn(dept).map(t=>teamRowHtml(dept, t)).join('')}
+    <div class="muted" style="font-size:12px;">${teamSummary(dept)}</div>
     <div class="row" style="margin-top:10px;">
-      <button type="button" class="btn secondary small btn-new-team-in-dept" data-dept="${dept.id}">+ New team in this department</button>
+      <button type="button" class="btn secondary small btn-open-dept-teams" data-dept="${dept.id}">Set up its teams</button>
       <div class="spacer"></div>
       <span class="muted dept-unsaved-note" data-dept="${dept.id}" style="font-size:11px; display:none;">Unsaved changes</span>
       <button type="button" class="btn small btn-save-dept" data-dept="${dept.id}">Save</button>
     </div>
   </div>`).join('');
 
-  // Teams with no department at all — a leftover from before this became required. Shown so
-  // an admin can resolve any that already exist; a team can no longer become ungrouped going
-  // forward (there's no "no department" option in the move dropdown above, and new teams only
-  // ever get created from within a department's own "+ New team" button).
-  const ungroupedTeams = state.teams.filter(t=>!t.departmentId);
-  const ungroupedHtml = ungroupedTeams.length>0 ? `<div style="border:1px dashed var(--line); border-radius:10px; padding:14px; margin-bottom:16px;">
-    <div style="font-weight:700; font-size:13.5px; margin-bottom:8px;">Not in a department — move each into one</div>
-    ${ungroupedTeams.map(t=>teamRowHtml(null, t)).join('')}
+  // Teams with no department at all — a leftover from before this became required. Named here
+  // so an Admin knows they exist; the actual fixing happens on the Teams tab, where the
+  // "Ungrouped teams" entry in the Department switcher lists them with a "Move to" dropdown.
+  const ungroupedCount = state.teams.filter(t=>!t.departmentId).length;
+  const ungroupedHtml = ungroupedCount>0 ? `<div style="border:1px dashed var(--line); border-radius:10px; padding:12px 14px; margin-bottom:16px;">
+    <div style="font-weight:700; font-size:13.5px; margin-bottom:4px;">${ungroupedCount} ${ungroupedCount===1?'team is':'teams are'} not in a department</div>
+    <div class="muted" style="font-size:12px;">Choose "Ungrouped teams" in the Department switcher, then move each one into a department from Department &rarr; Teams.</div>
   </div>` : '';
 
   wrap.innerHTML = listHtml + ungroupedHtml + `
@@ -2276,86 +2281,9 @@ function renderDeptSetupCard(){
       <label class="chip-check" style="display:inline-flex;"><input type="checkbox" id="dept-grand-views-toggle" checked> Combine its teams into a Grand Schedule / Requirement / Balance / Registry</label>
       <div class="muted" style="font-size:11px; margin-top:4px;">Off = teams stay fully independent — no combined view, no shared requirement.</div>
     </div>
-    <div class="hint" style="margin-top:6px;">Creates an empty department — add teams to it afterward with "+ New team in this department" above.</div>
+    <div class="hint" style="margin-top:6px;">Creates an empty department — add its teams afterward from Department &rarr; Teams.</div>
     <div class="row" style="margin-top:14px;"><div class="spacer"></div><button class="btn small" id="btn-create-dept">Create department</button></div>
   `;
-  enhanceSelectsIn(wrap);
-  wrap.querySelectorAll('.dept-team-name-edit').forEach(inp=>{
-    const saveIfChanged = async ()=>{
-      const team = state.teams.find(t=>t.id===inp.dataset.team);
-      if(!team) return;
-      const newName = inp.value.trim();
-      if(!newName){ inp.value = team.name; return; } // never save a blank name — just revert
-      if(newName === team.name) return;
-      const oldName = team.name;
-      team.name = newName;
-      const ok = await safeSet('teams', state.teams);
-      if(ok){
-        showToast(`Renamed to "${newName}"`);
-        logAudit('team.rename', { from: oldName, to: newName });
-        renderTeamSwitcher(); // team name shows there too (picker + Grand tab bars)
-      } else {
-        team.name = oldName;
-        inp.value = oldName;
-      }
-    };
-    inp.addEventListener('blur', saveIfChanged);
-    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
-    inp.addEventListener('click', e=> e.stopPropagation());
-  });
-  wrap.querySelectorAll('.dept-team-manager-edit').forEach(sel=>{
-    sel.addEventListener('change', async ()=>{
-      const team = state.teams.find(t=>t.id===sel.dataset.team);
-      if(!team) return;
-      const prevManagerId = team.managerId;
-      team.managerId = sel.value || null;
-      const ok = await safeSet('teams', state.teams);
-      if(ok){ logAudit('team.manager_change', { team: team.name }); }
-      else { team.managerId = prevManagerId; renderDeptSetupCard(); }
-    });
-  });
-  wrap.querySelectorAll('.team-color-dot').forEach(btn=>{
-    btn.addEventListener('click', (e)=>{
-      e.stopPropagation();
-      const swatches = btn.nextElementSibling;
-      const wasOpen = swatches.classList.contains('open');
-      wrap.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
-      if(!wasOpen) swatches.classList.add('open');
-    });
-  });
-  wrap.querySelectorAll('.team-color-swatch').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      e.stopPropagation();
-      const team = state.teams.find(t=>t.id===btn.dataset.team);
-      if(!team) return;
-      team.colorIndex = +btn.dataset.ci;
-      const ok = await safeSet('teams', state.teams);
-      if(ok){ logAudit('team.color_change', { name: team.name }); }
-      renderDeptSetupCard();
-      renderTeamSwitcher();
-      applyTeamAccent();
-    });
-  });
-  wrap.querySelectorAll('.dept-team-duplicate-btn').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const source = state.teams.find(t=>t.id===btn.dataset.team);
-      if(!source) return;
-      const ti = state.teams.indexOf(source);
-      const newId = 'team_'+Math.random().toString(36).slice(2,9);
-      state.teams.splice(ti+1, 0, { id:newId, name:`${source.name} (copy)`, managerId:null, departmentId:source.departmentId||null });
-      state.tasksByTeam[newId] = JSON.parse(JSON.stringify(state.tasksByTeam[source.id]||[]));
-      state.reqByTeam[newId] = JSON.parse(JSON.stringify(state.reqByTeam[source.id]||{}));
-      const ok = await safeSet('teams', state.teams);
-      if(ok){
-        await safeSet('tasks_'+newId, state.tasksByTeam[newId], true);
-        await safeSet('weekly_req_'+newId, state.reqByTeam[newId], true);
-        logAudit('team.duplicate', { from: source.name, to: `${source.name} (copy)` });
-        showToast(`Duplicated ${source.name} — same tasks and weekly needs, no people yet`);
-      }
-      renderDeptSetupCard();
-      renderTeamSwitcher();
-    });
-  });
   document.getElementById('btn-create-dept').addEventListener('click', async ()=>{
     const deptName = document.getElementById('dept-name-input').value.trim();
     if(!deptName){ showToast('Give the department a name first'); return; }
@@ -2390,7 +2318,7 @@ function renderDeptSetupCard(){
       if(ok){
         showToast(`"${newName}" saved`);
         logAudit('department.save', { name: newName, showGrandViews: newShowGrandViews });
-        // If you're not currently viewing a team in this department, the Grand nav box change
+        // If you're not currently viewing a team in this department, the Grand nav change
         // wouldn't be visible at all — switch you into one so the effect is obvious immediately,
         // rather than requiring you to know you need to navigate there yourself to see it.
         const currentTeamInThisDept = state.teams.find(t=>t.id===currentTeamId)?.departmentId === deptId;
@@ -2406,11 +2334,188 @@ function renderDeptSetupCard(){
       }
     });
   });
+  wrap.querySelectorAll('.btn-open-dept-teams').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      currentDepartmentId = btn.dataset.dept;
+      const teamsHere = teamsInDepartment(currentDepartmentId);
+      if(teamsHere.length>0) await switchTeam(teamsHere[0].id); else renderTeamSwitcher();
+      const navBtn = document.getElementById('nav-dept-teams');
+      if(navBtn) navBtn.click();
+    });
+  });
+}
+
+// ===== DEPARTMENT -> TEAMS TAB =====
+// Scoped to whichever department the sidebar switcher is currently on, so an Admin works one
+// department at a time and a Manager only ever sees their own. This is also the one screen
+// that has to stay reachable when a team isn't in a department yet — it's where that gets
+// fixed — so renderTeamSwitcher keeps its nav item visible even with no Grand views.
+function renderDeptTeamsCard(){
+  const wrap = document.getElementById('dept-teams-body');
+  if(!wrap) return;
+  const deptId = currentDepartmentId;
+  const dept = state.departments.find(d=>d.id===deptId) || null;
+  const isUngrouped = deptId==='__ungrouped__';
+  const label = document.getElementById('dept-teams-scope-label');
+  if(label) label.textContent = dept ? `— ${dept.name}` : (isUngrouped ? '— not in a department' : '');
+
+  if(state.departments.length===0){
+    wrap.innerHTML = isOrgAdminViewer()
+      ? `<div class="muted" style="font-size:12.5px;">No departments yet — create one on the <strong>Departments</strong> tab first, then come back here to add its teams.</div>`
+      : `<div class="muted" style="font-size:12.5px;">No departments have been set up yet — an Admin needs to create one first.</div>`;
+    return;
+  }
+
+  const teams = teamsInDepartment(deptId);
+  const canEdit = canEditTeamsInDept(deptId);
+  const canMoveBetweenDepts = isOrgAdminViewer();
+
+  if(!canEdit){
+    const roHtml = teams.map(t=>{
+      const count = state.members.filter(m=>m.teamId===t.id).length;
+      return `<div style="display:flex; align-items:center; gap:8px; padding:6px 4px;">
+        <span class="team-color-dot" style="background:${colorForTeam(t.id).bg};"></span>
+        <span style="font-size:13.5px; flex:1;">${escHtml(t.name)}</span>
+        <span class="muted" style="font-size:11.5px;">${count} ${count===1?'person':'people'}</span>
+      </div>`;
+    }).join('');
+    wrap.innerHTML = (roHtml || `<div class="muted" style="font-size:12.5px;">No teams in this department yet.</div>`)
+      + `<div class="muted" style="font-size:11.5px; margin-top:8px;">You can only change the teams in the department you manage.</div>`;
+    return;
+  }
+
+  // Manager options are scoped to this department's own members — the same person can't be put
+  // in charge of a team in a department they're not even part of.
+  const idsInScope = new Set(teams.map(t=>t.id));
+  const managerOptions = state.members.filter(m=>idsInScope.has(m.teamId));
+
+  // Moving a team between departments is an Admin-level act — a Manager must not be able to
+  // push a team out of (or pull one into) the department they were assigned to.
+  const moveSelectHtml = team=>{
+    if(!canMoveBetweenDepts) return '';
+    const stray = !team.departmentId;
+    const opts = (stray ? `<option value="" selected>— choose —</option>` : '')
+      + state.departments.map(d=>`<option value="${d.id}" ${d.id===team.departmentId?'selected':''}>${escHtml(d.name)}</option>`).join('');
+    return `<label style="font-size:11px; color:var(--ink-soft); display:flex; align-items:center; gap:5px; flex-shrink:0;">Move to: <select class="dept-team-move-select" data-team="${team.id}">${opts}</select></label>`;
+  };
+
+  const teamRowHtml = t=>{
+    const tc = colorForTeam(t.id);
+    const count = state.members.filter(m=>m.teamId===t.id).length;
+    return `<div class="dept-team-row" data-team="${t.id}" style="display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px;">
+    <div class="team-color-picker-wrap">
+      <button type="button" class="team-color-dot" data-team="${t.id}" style="background:${tc.bg};" title="Click to change this team's color"></button>
+      <div class="team-color-swatches">
+        ${lightPaletteForPicker().map((c,ci)=>`<button type="button" class="team-color-swatch ${t.colorIndex===ci?'selected':''}" data-team="${t.id}" data-ci="${ci}" style="background:${c.bg};"></button>`).join('')}
+      </div>
+    </div>
+    <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
+    <select class="dept-team-manager-edit" data-team="${t.id}">
+      <option value="">— no manager set —</option>
+      ${managerOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
+    </select>
+    <span class="muted" style="font-size:11.5px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
+    ${moveSelectHtml(t)}
+    <button type="button" class="btn secondary small dept-team-duplicate-btn" data-team="${t.id}" title="Create a new team with the same tasks and weekly needs">Duplicate</button>
+    <button type="button" class="btn-remove-x dept-team-remove-btn" data-team="${t.id}" title="Remove team">×</button>
+  </div>`;
+  };
+
+  const rowsHtml = teams.length===0
+    ? `<div class="muted" style="font-size:12.5px; margin-bottom:8px;">No teams in this department yet.</div>`
+    : teams.map(teamRowHtml).join('');
+
+  // "Ungrouped teams" is a virtual bucket, not a real department — there's nothing to create a
+  // new team inside, so the add button only appears on a real one.
+  const addHtml = isUngrouped ? '' : `<div class="row" style="margin-top:12px;">
+    <button type="button" class="btn secondary small" id="btn-new-team-here" data-dept="${deptId}">+ New team in this department</button>
+  </div>`;
+
+  wrap.innerHTML = rowsHtml + addHtml;
+  enhanceSelectsIn(wrap);
+
+  wrap.querySelectorAll('.dept-team-name-edit').forEach(inp=>{
+    const saveIfChanged = async ()=>{
+      const team = state.teams.find(t=>t.id===inp.dataset.team);
+      if(!team) return;
+      const newName = inp.value.trim();
+      if(!newName){ inp.value = team.name; return; } // never save a blank name — just revert
+      if(newName === team.name) return;
+      const oldName = team.name;
+      team.name = newName;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){
+        showToast(`Renamed to "${newName}"`);
+        logAudit('team.rename', { from: oldName, to: newName });
+        renderTeamSwitcher(); // team name shows there too (picker + Grand tab bars)
+      } else {
+        team.name = oldName;
+        inp.value = oldName;
+      }
+    };
+    inp.addEventListener('blur', saveIfChanged);
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ inp.blur(); } });
+    inp.addEventListener('click', e=> e.stopPropagation());
+  });
+  wrap.querySelectorAll('.dept-team-manager-edit').forEach(sel=>{
+    sel.addEventListener('change', async ()=>{
+      const team = state.teams.find(t=>t.id===sel.dataset.team);
+      if(!team) return;
+      const prevManagerId = team.managerId;
+      team.managerId = sel.value || null;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){ logAudit('team.manager_change', { team: team.name }); }
+      else { team.managerId = prevManagerId; renderDeptTeamsCard(); }
+    });
+  });
+  wrap.querySelectorAll('.team-color-dot').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const swatches = btn.nextElementSibling;
+      const wasOpen = swatches.classList.contains('open');
+      wrap.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
+      if(!wasOpen) swatches.classList.add('open');
+    });
+  });
+  wrap.querySelectorAll('.team-color-swatch').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const team = state.teams.find(t=>t.id===btn.dataset.team);
+      if(!team) return;
+      team.colorIndex = +btn.dataset.ci;
+      const ok = await safeSet('teams', state.teams);
+      if(ok){ logAudit('team.color_change', { name: team.name }); }
+      renderDeptTeamsCard();
+      renderTeamSwitcher();
+      applyTeamAccent();
+    });
+  });
+  wrap.querySelectorAll('.dept-team-duplicate-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const source = state.teams.find(t=>t.id===btn.dataset.team);
+      if(!source) return;
+      const ti = state.teams.indexOf(source);
+      const newId = 'team_'+Math.random().toString(36).slice(2,9);
+      state.teams.splice(ti+1, 0, { id:newId, name:`${source.name} (copy)`, managerId:null, departmentId:source.departmentId||null });
+      state.tasksByTeam[newId] = JSON.parse(JSON.stringify(state.tasksByTeam[source.id]||[]));
+      state.reqByTeam[newId] = JSON.parse(JSON.stringify(state.reqByTeam[source.id]||{}));
+      const ok = await safeSet('teams', state.teams);
+      if(ok){
+        await safeSet('tasks_'+newId, state.tasksByTeam[newId], true);
+        await safeSet('weekly_req_'+newId, state.reqByTeam[newId], true);
+        logAudit('team.duplicate', { from: source.name, to: `${source.name} (copy)` });
+        showToast(`Duplicated ${source.name} — same tasks and weekly needs, no people yet`);
+      }
+      renderDeptTeamsCard();
+      renderTeamSwitcher();
+    });
+  });
   wrap.querySelectorAll('.dept-team-move-select').forEach(sel=>{
     sel.addEventListener('change', async ()=>{
       const team = state.teams.find(t=>t.id===sel.dataset.team);
       if(!team) return;
       const newDeptId = sel.value;
+      if(!newDeptId) return; // the "— choose —" placeholder on a team that has no department yet
       const prevDeptId = team.departmentId || null;
       if(newDeptId===prevDeptId) return;
       team.departmentId = newDeptId;
@@ -2423,27 +2528,27 @@ function renderDeptSetupCard(){
       } else {
         team.departmentId = prevDeptId;
       }
-      renderDeptSetupCard();
+      renderDeptTeamsCard();
     });
   });
   wrap.querySelectorAll('.dept-team-remove-btn').forEach(btn=>{
     btn.addEventListener('click', ()=> removeTeamEntirely(btn.dataset.team));
   });
-  wrap.querySelectorAll('.btn-new-team-in-dept').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const deptId = btn.dataset.dept;
+  const addBtn = document.getElementById('btn-new-team-here');
+  if(addBtn){
+    addBtn.addEventListener('click', async ()=>{
       const id = 'team_'+Math.random().toString(36).slice(2,9);
-      state.teams.push({id, name:'New Team', managerId:null, departmentId:deptId});
+      state.teams.push({id, name:'New Team', managerId:null, departmentId: addBtn.dataset.dept});
       state.tasksByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_TASKS));
       state.reqByTeam[id] = JSON.parse(JSON.stringify(DEFAULT_REQ));
       const ok = await safeSet('teams', state.teams);
-      if(ok){ logAudit('team.create', { departmentId: deptId }); }
-      renderDeptSetupCard();
+      if(ok){ logAudit('team.create', { departmentId: addBtn.dataset.dept }); }
+      renderDeptTeamsCard();
       renderTeamSwitcher();
       const newInput = document.querySelector(`.dept-team-name-edit[data-team="${id}"]`);
       if(newInput){ newInput.focus(); newInput.select(); }
     });
-  });
+  }
 }
 
 // ---- Ideas & Bugs tracker ----
@@ -3127,6 +3232,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
     if(btn.dataset.tab==='data'){ renderAuditLog(); }
     if(btn.dataset.tab==='departments'){ renderDeptSetupCard(); }
+    if(btn.dataset.tab==='dept-teams'){ renderDeptTeamsCard(); }
     if(btn.dataset.tab==='ideas') renderIdeasTab();
     if(btn.dataset.tab==='grand') renderGrandTab();
     if(btn.dataset.tab==='grand-tasks') renderGrandTasksTab();
@@ -3901,7 +4007,7 @@ function renderTeamTab(){
     sel.addEventListener('change', ()=>{
       // Changing which department someone manages doesn't, on its own, move which team
       // they're physically on — without this, they'd stay visible in their old department's
-      // lists (Teams & People, Grand Schedule, etc.) even after their manager scope moved.
+      // lists (People, Grand Schedule, etc.) even after their manager scope moved.
       const card = sel.closest('.member-card');
       const teamSel = card ? card.querySelector('.m-team') : null;
       if(!teamSel) return;
@@ -4354,7 +4460,21 @@ function renderTeamSwitcher(){
     const myTeamDept = state.teams.find(t=>t.id===currentTeamId)?.departmentId;
     const dept = state.departments.find(d=>d.id===myTeamDept);
     const showGrand = !!myTeamDept && (!dept || dept.showGrandViews !== false);
-    grandNavBox.style.display = showGrand ? '' : 'none';
+    // Only the combined views depend on the current team actually being in a department with
+    // Grand turned on. "Teams" must not: it's the screen where a team gets put into a
+    // department in the first place, so hiding the whole section — as this used to — locked an
+    // admin out of the only place that could fix a team having no department.
+    ['nav-grand-tasks','nav-grand-req','nav-grand','toggle-dept-insights'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(el) el.style.display = showGrand ? '' : 'none';
+    });
+    if(!showGrand){
+      const sub = document.getElementById('submenu-dept-insights');
+      const toggle = document.getElementById('toggle-dept-insights');
+      if(sub) sub.style.display = 'none';
+      if(toggle) toggle.setAttribute('aria-expanded','false');
+    }
+    grandNavBox.style.display = '';
   }
   const deptWrap = document.getElementById('dept-switcher-wrap');
   const deptSel = document.getElementById('dept-switch-select');
@@ -4416,6 +4536,7 @@ document.getElementById('dept-switch-select').addEventListener('change', (e)=>{
   const teamsHere = teamsInDepartment(currentDepartmentId);
   if(teamsHere.length>0) switchTeam(teamsHere[0].id); else renderTeamSwitcher();
   renderTeamsList();
+  renderDeptTeamsCard(); // this tab is scoped to the selected department
 });
 document.getElementById('team-switch-select').addEventListener('change', (e)=>{ switchTeam(e.target.value); });
 // Switching teams swaps what state.tasks/state.req/state.schedules point to (see the
@@ -4449,16 +4570,16 @@ async function renderOrgTab(){
   renderTeamTab();
   await renderUnassignedList();
 }
-// Shared by both Teams & People's own "Remove" and the Departments tab's per-team "Remove" —
+// Shared by both the People tab's own "Remove" and Department -> Teams' per-team "Remove" —
 // keyed by teamId rather than a row index so either UI can call it the same way.
 async function removeTeamEntirely(teamId){
   const team = state.teams.find(t=>t.id===teamId);
   if(!team) return;
   if(state.members.some(m=>m.teamId===teamId)){ showToast('Move everyone off this team before removing it'); return; }
   if(state.teams.length<=1){ showToast('You need at least one team'); return; }
-  // This can be triggered from the Departments tab, which shows teams across every
-  // department — not just whichever one is currently loaded — so the snapshot below could
-  // otherwise silently capture an empty array for a team nobody's actually loaded this
+  // This can be triggered from the Department -> Teams tab, which lists whichever department
+  // the switcher is on — not necessarily the team currently loaded — so the snapshot below
+  // could otherwise silently capture an empty array for a team nobody's actually loaded this
   // session, and undo would then overwrite the real data with nothing.
   await ensureTeamDataLoaded([teamId]);
   askConfirm(`Remove the team "${team.name}"? Its tasks and weekly needs go with it.`, 'Remove', async ()=>{
@@ -4475,7 +4596,8 @@ async function removeTeamEntirely(teamId){
     if(currentTeamId===teamId) await switchTeam(state.teams[0].id);
     renderTeamsList();
     renderTeamSwitcher();
-    renderDeptSetupCard();
+    renderDeptTeamsCard();
+    renderDeptSetupCard(); // its per-department summary line names each team
     pushUndo(async ()=>{
       state.teams.splice(insertAt, 0, teamSnapshot);
       state.tasksByTeam[teamId] = tasksSnapshot;
@@ -4483,7 +4605,7 @@ async function removeTeamEntirely(teamId){
       await safeSet('teams', state.teams, true);
       await safeSet('tasks_'+teamId, tasksSnapshot, true);
       await safeSet('weekly_req_'+teamId, reqSnapshot, true);
-      renderTeamsList(); renderTeamSwitcher(); renderDeptSetupCard();
+      renderTeamsList(); renderTeamSwitcher(); renderDeptTeamsCard(); renderDeptSetupCard();
       showToast('Restored');
     });
     if(ok) showToast('Team removed', undoLast);
@@ -8433,7 +8555,7 @@ document.getElementById('btn-import').addEventListener('click', async ()=>{
 // "Who you are" is now the Firebase-authenticated user, not a name picked from a dropdown.
 // window.rotaAuth.onReady() (defined in the earlier module) resolves that account against
 // access_control/approved + signup_requests and hands us one of: approved / pending / error.
-// What you SEE is driven by that person's role in Teams & People — Admin or Manager gets
+// What you SEE is driven by that person's role in People — Admin or Manager gets
 // the admin view, everyone else gets the read-only viewer view — but which member record
 // you're bound to is no longer something you can just pick; it's looked up by authUid.
 let viewMode = null;
@@ -8719,12 +8841,15 @@ function updateWhosOnNavVisibility(){
 // Departments is Admin-only functionality, distinct from Manager — a Manager gets the admin
 // UI generally, but never department creation/editing, so this needs its own runtime check
 // rather than just the existing admin-only CSS class (which doesn't distinguish the two roles).
+// The Departments tab is the organisation-wide view, so it's Admin-only — and it now sits in
+// its own sidebar section, which has to hide along with it or a Manager would see an empty
+// "Organisation" heading with nothing under it.
 function updateDepartmentsNavVisibility(){
   const btn = document.getElementById('nav-departments');
-  if(!btn) return;
-  const me = currentViewerMember();
-  const isOrgAdmin = !!(me && (me.role==='admin' || me.isAdmin===true));
-  btn.style.display = isOrgAdmin ? '' : 'none';
+  const box = document.getElementById('org-nav-box');
+  const isOrgAdmin = isOrgAdminViewer();
+  if(btn) btn.style.display = isOrgAdmin ? '' : 'none';
+  if(box) box.style.display = isOrgAdmin ? '' : 'none';
 }
 let whosOnWeekMonday = null;
 async function renderWhosOnTab(){
