@@ -1815,16 +1815,31 @@ window.rotaReady = (async function boot(){
       if(matchedId){
         if(!alreadyMine){
           // Fresh claim — member_contacts only permits this self-claim write while authUid is
-          // still null, and claimed_links can never be re-written once created, so both of
-          // these must only run the first time, never during a repair of an already-claimed one.
+          // still null, so it must only run the first time.
           await setDoc(doc(db,'member_contacts', matchedId), { email:normalizedEmail, authUid:user.uid });
-          await setDoc(doc(db,'claimed_links', user.uid), { memberId: matchedId });
           // Name is deliberately left blank here, even though Google already handed us a
           // displayName — the boot sequence shows an explicit "confirm your name" screen the
           // first time someone lands with a blank name, pre-filled with Google's name as a
           // suggestion but requiring an actual confirm, rather than silently trusting whatever
           // Google's account name happens to be (nicknames, wrong order, etc. are common).
         }
+        // claimed_links is what the rules use to let this person set their own name, and it
+        // used to be written only on the very first login — alongside the member_contacts
+        // write above, sequentially and not atomically. If that first write landed and this
+        // one didn't (a dropped connection at exactly the wrong moment), the next login saw
+        // authUid already set, took the "already mine" path, skipped this write forever, and
+        // the person was permanently stuck on "Couldn't save" at the name screen with no way
+        // out. The rule permits creating it whenever member_contacts already points at this
+        // uid, so create it if it's genuinely missing instead of assuming the first login
+        // succeeded. It can never be overwritten, so this is only ever a repair.
+        try{
+          const linkRef = doc(db,'claimed_links', user.uid);
+          const linkSnap = await getDoc(linkRef);
+          if(!linkSnap.exists()){
+            console.log('[invite check] claimed_links was missing — creating it now');
+            await setDoc(linkRef, { memberId: matchedId });
+          }
+        }catch(e){ console.error('[invite check] could not ensure claimed_links', e); }
         // The actual fix, either way: without this, every login after the first one used to
         // fail — approvedUids never contained this uid, and by the second login authUid was
         // already set, so the "still unclaimed" branch above no longer matched them either.
@@ -9167,15 +9182,15 @@ function showNameConfirmScreen(m, suggestedName){
     modal.classList.add('open');
     firstInput.focus();
     if(firstInput.value) firstInput.select();
-    const submitBtn = document.getElementById('name-confirm-submit');
     const onSubmit = async ()=>{
+      const submitBtn = document.getElementById('name-confirm-submit');
       const first = firstInput.value.trim();
       const last = lastInput.value.trim();
       if(!first || !last){
         (first ? lastInput : firstInput).focus();
         return;
       }
-      if(errorEl) errorEl.style.display = 'none';
+      if(errorEl){ errorEl.style.display = 'none'; errorEl.textContent = ''; }
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving…';
       const fullName = `${first} ${last}`;
@@ -9186,8 +9201,12 @@ function showNameConfirmScreen(m, suggestedName){
       // time this permission check runs. A brief pause and retry smooths that over invisibly,
       // rather than the person having to notice the failure and manually refresh themselves.
       let lastError = null;
-      for(let attempt=0; attempt<3; attempt++){
-        if(attempt>0) await new Promise(r=>setTimeout(r, 800));
+      // Backs off rather than three quick tries: rule propagation after a first-ever login can
+      // take a couple of seconds, and a person who sees an error here has no idea it would have
+      // worked a moment later.
+      const waits = [0, 500, 1000, 1800];
+      for(let attempt=0; attempt<waits.length; attempt++){
+        if(waits[attempt]) await new Promise(r=>setTimeout(r, waits[attempt]));
         try{
           // Deliberately NOT persistMembers() here — that writes the whole member document via
           // setDoc, and the rule permitting this exact write requires the diff to touch nothing
@@ -9206,11 +9225,47 @@ function showNameConfirmScreen(m, suggestedName){
           console.error(`[name confirm] save attempt ${attempt+1} failed:`, e);
         }
       }
-      if(errorEl){ errorEl.textContent = "Couldn't save — please try again."; errorEl.style.display = 'block'; }
+      // Every attempt failed. Before showing an error, check whether the name is actually
+      // already set — an earlier attempt of theirs may have landed, or an admin may have
+      // filled it in meanwhile, in which case there is nothing left to do and blocking them
+      // would be nonsense.
+      try{
+        const { getDoc } = window.rotaDb;
+        const fresh = await getDoc(doc(db, 'app_members', m.id));
+        const storedName = fresh.exists() ? (fresh.data().name||'') : '';
+        if(storedName.trim()){
+          m.name = storedName;
+          membersSyncSnapshot.set(m.id, memberContentString(m));
+          modal.classList.remove('open');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Continue';
+          resolve();
+          return;
+        }
+      }catch(e){ console.error('[name confirm] could not re-read the member record', e); }
+
+      // Genuinely could not save. Being stuck on this screen is the worst outcome available —
+      // it locks someone out of the whole app over a display name — so let them in with the
+      // name they typed applied locally and say plainly that an admin needs to set it. The
+      // error code is shown because "please try again" told nobody anything, and this is the
+      // one screen where nobody technical is watching the console.
+      const code = (lastError && (lastError.code || lastError.message)) || 'unknown error';
+      console.error('[name confirm] giving up; letting them through without saving. Last error:', lastError);
+      m.name = fullName; // local only — an admin can set it properly on the People tab
+      if(errorEl){
+        errorEl.innerHTML = `Couldn't save your name (${escHtml(String(code))}). `
+          + `Taking you in anyway — ask an admin to set your name on the People tab.`;
+        errorEl.style.display = 'block';
+      }
       submitBtn.disabled = false;
       submitBtn.textContent = 'Continue';
+      setTimeout(()=>{ modal.classList.remove('open'); resolve(); }, 3000);
     };
-    submitBtn.addEventListener('click', onSubmit);
+    // Re-entering this screen must not stack a second handler on the same button, or one
+    // click would fire the save twice. Replacing the node drops any handler from last time.
+    const oldBtn = document.getElementById('name-confirm-submit');
+    oldBtn.replaceWith(oldBtn.cloneNode(true));
+    document.getElementById('name-confirm-submit').addEventListener('click', onSubmit);
   });
 }
 async function bindIdentityToMember(info){
