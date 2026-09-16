@@ -2669,7 +2669,7 @@ function renderDeptTeamsCard(){
     <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
     <select class="dept-team-manager-edit" data-team="${t.id}">
       <option value="">— no manager set —</option>
-      ${managerOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(m.name)}</option>`).join('')}
+      ${managerOptions.map(m=>`<option value="${m.id}" ${m.id===t.managerId?'selected':''}>${escHtml(memberName(m.id))}</option>`).join('')}
     </select>
     <span class="muted" style="font-size:11.5px; white-space:nowrap;">${count} ${count===1?'person':'people'}</span>
     <label class="chip-check dept-team-independent-label" title="Off: this team takes its tasks, weekly needs and rotation from the department, and shares cover with the other teams here. On: it runs its own, and its people are left out of the department's rotation — it still appears in the Grand views.">
@@ -4282,12 +4282,12 @@ function renderTeamTab(){
       const card = btn.closest('.member-card');
       const mid = card.dataset.mid;
       const member = state.members.find(m=>m.id===mid);
-      askConfirm(`Remove ${member.name} from the team? This also drops their holiday history and revokes their access to the app.`, 'Remove', async ()=>{
+      askConfirm(`Remove ${memberName(mid)} from the team? This also drops their holiday history and revokes their access to the app.`, 'Remove', async ()=>{
         const removed = await removePersonEntirely(mid);
         if(!removed) return;
         renderTeamTab();
         undoRemovePerson(removed);
-        showToast(`Removed ${removed.member.name}`, undoLast);
+        showToast(`Removed ${removed.member.name || removed.contact.email || 'that person'}`, undoLast);
       });
     });
   });
@@ -4872,7 +4872,7 @@ async function renderUnassignedList(){
   let html = '';
   unassigned.forEach(m=>{
     html += `<div class="team-row" data-mid="${m.id}">
-      <span style="font-weight:600; width:150px;">${escHtml(m.name)}</span>
+      <span style="font-weight:600; width:150px;">${escHtml(memberName(m.id))}</span>
       <span class="muted" style="font-size:12px; width:170px;">${escHtml((memberContacts[m.id]&&memberContacts[m.id].email)||'no email')}</span>
       <select class="unassigned-team-pick">${state.teams.map(t=>`<option value="${t.id}">${escHtml(t.name)}</option>`).join('')}</select>
       <div class="spacer"></div>
@@ -6138,7 +6138,7 @@ async function renderGrandBalanceTab(){
         const pct = Math.round((c.v/maxV)*100);
         const isNext = c.v===minV;
         html += `<div class="bal-row">
-          <div class="bal-name">${escHtml(c.m.name)}${showTeam?` <span class="muted" style="font-size:10.5px;">— ${escHtml(c.team.name)}</span>`:''} ${isNext?'<span class="bal-next">next up</span>':''}</div>
+          <div class="bal-name">${escHtml(memberName(c.m.id))}${showTeam?` <span class="muted" style="font-size:10.5px;">— ${escHtml(c.team.name)}</span>`:''} ${isNext?'<span class="bal-next">next up</span>':''}</div>
           <div class="bal-bar-wrap"><div style="width:${pct}%; background:${colorForMember(c.m.id).bg};"></div></div>
           <div class="bal-count mono">${c.v}</div>
         </div>`;
@@ -6709,11 +6709,14 @@ document.getElementById('replace-search-input').addEventListener('input', ()=>{
   const q = document.getElementById('replace-search-input').value.trim().toLowerCase();
   const resultsEl = document.getElementById('replace-search-results');
   if(!q){ resultsEl.innerHTML = ''; return; }
-  const matches = replaceSearchPool().filter(m=> (m.name||'').toLowerCase().includes(q)).slice(0, 10);
+  const matches = replaceSearchPool().filter(m=>{
+    const email = (memberContacts[m.id] && memberContacts[m.id].email) || '';
+    return memberName(m.id).toLowerCase().includes(q) || email.toLowerCase().includes(q);
+  }).slice(0, 10);
   if(matches.length===0){ resultsEl.innerHTML = `<div class="muted" style="font-size:12.5px; padding:8px 0;">No one matches.</div>`; return; }
   resultsEl.innerHTML = matches.map(m=>{
     const teamName = state.teams.find(t=>t.id===m.teamId)?.name || '';
-    return `<div class="team-row" style="cursor:pointer;" data-mid="${m.id}"><span style="font-weight:600;">${escHtml(m.name||'(name pending)')}</span><span class="muted" style="font-size:11.5px; margin-left:8px;">${escHtml(teamName)}</span></div>`;
+    return `<div class="team-row" style="cursor:pointer;" data-mid="${m.id}"><span style="font-weight:600;">${escHtml(memberName(m.id))}</span><span class="muted" style="font-size:11.5px; margin-left:8px;">${escHtml(teamName)}</span></div>`;
   }).join('');
   resultsEl.querySelectorAll('[data-mid]').forEach(row=>{
     row.addEventListener('click', ()=> selectReplaceSearchPerson(row.dataset.mid));
@@ -6799,7 +6802,7 @@ async function showReplaceSearchPicker(person, assignment, idx, wrap){
     pickerEl.innerHTML = `<div class="muted" style="font-size:11.5px;">No one else is eligible and free for this.</div>`;
     return;
   }
-  pickerEl.innerHTML = candidates.map(c=>`<button type="button" class="btn secondary small btn-replace-search-candidate" data-mid="${c.id}" style="margin:0 6px 6px 0;">${escHtml(c.name)}</button>`).join('');
+  pickerEl.innerHTML = candidates.map(c=>`<button type="button" class="btn secondary small btn-replace-search-candidate" data-mid="${c.id}" style="margin:0 6px 6px 0;">${escHtml(memberName(c.id))}</button>`).join('');
   pickerEl.querySelectorAll('.btn-replace-search-candidate').forEach(cbtn=>{
     cbtn.addEventListener('click', async ()=>{
       await runReplaceSearchAction(person, assignment, cbtn.dataset.mid);
@@ -7175,7 +7178,7 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
     }
     const showTeamInLabel = g.perTeam.length>1;
     const addSelectHtml = `<div class="add-select" data-dates="${runDates.join(',')}">
-      <select data-add="1"><option value="" data-hidden-opt="1">+</option>${combinedOptions.map(o=>`<option value="${o.team.id}::${o.task.id}::${o.member.id}">${escHtml(o.member.name)} (${(o.member.levels||[]).join('/')})${showTeamInLabel?' — '+escHtml(o.team.name):''}</option>`).join('')}</select>
+      <select data-add="1"><option value="" data-hidden-opt="1">+</option>${combinedOptions.map(o=>`<option value="${o.team.id}::${o.task.id}::${o.member.id}">${escHtml(memberName(o.member.id))} (${(o.member.levels||[]).join('/')})${showTeamInLabel?' — '+escHtml(o.team.name):''}</option>`).join('')}</select>
     </div>`;
     let notice = '';
     if(spanned) notice = `<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`;
@@ -7919,7 +7922,7 @@ function renderYourWeekSummary(){
   if(!me){ card.style.display = 'none'; return; }
   if(me.teamId !== currentTeamId){
     card.style.display = '';
-    wrap.innerHTML = `<div class="your-week-empty">${escHtml(me.name)} isn't on this team — switch teams above to see their assignments.</div>`;
+    wrap.innerHTML = `<div class="your-week-empty">${escHtml(memberName(me.id))} isn't on this team — switch teams above to see their assignments.</div>`;
     return;
   }
   card.style.display = '';
@@ -8210,7 +8213,7 @@ async function doReplace(taskId, cellDates, outgoingId){
     await saveWeek(iso(currentWeekMonday), currentSchedule);
     balanceCache = null;
     drawScheduleGrid();
-    showToast(`Replaced with ${replacement.name}`);
+    showToast(`Replaced with ${memberName(replacement.id)}`);
     return;
   }
   let anyReplaced = false, allReplaced = true;
@@ -8230,7 +8233,7 @@ async function doReplace(taskId, cellDates, outgoingId){
 // level, not on holiday, no conflicting task) on every date the cell covers. A normal single
 // day is just a one-date run, so this one function correctly covers both cases.
 function eligibleOptionsForRun(taskId, dateISOs, already){
-  return eligibleMembersForRun(taskId, dateISOs, already).map(m=>`<option value="${m.id}">${escHtml(m.name)} (${(m.levels||[]).join('/')})</option>`);
+  return eligibleMembersForRun(taskId, dateISOs, already).map(m=>`<option value="${m.id}">${escHtml(memberName(m.id))} (${(m.levels||[]).join('/')})</option>`);
 }
 function eligibleMembersForRun(taskId, dateISOs, already){
   const task = state.tasks.find(t=>t.id===taskId);
@@ -8518,7 +8521,7 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
               await safeSet('notified_snapshot_'+cross.team.id+'_'+crossWeekISO, currentSchedule, true);
             });
             crossTeam++;
-            crossTeamNotes.push(`${cross.member.name} (${cross.team.name})`);
+            crossTeamNotes.push(`${memberName(cross.member.id)} (${cross.team.name})`);
             addInstant(cross.member.id, cross.task.id, dISO, cross.team.id);
             logAudit('schedule.cross_team_cover', { task: task.name, date: dISO, coveredBy: cross.member.name, fromTeam: cross.team.name, originTeam: originTeam?.name });
           } else {
@@ -8575,7 +8578,7 @@ async function renderBalanceTab(){
         const pct = Math.round((c.v/maxV)*100);
         const isNext = c.v===minV;
         html += `<div class="bal-row">
-          <div class="bal-name">${escHtml(c.m.name)} ${isNext?'<span class="bal-next">next up</span>':''}</div>
+          <div class="bal-name">${escHtml(memberName(c.m.id))} ${isNext?'<span class="bal-next">next up</span>':''}</div>
           <div class="bal-bar-wrap"><div style="width:${pct}%; background:${colorForMember(c.m.id).bg};"></div></div>
           <div class="bal-count mono">${c.v}</div>
         </div>`;
