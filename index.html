@@ -8600,11 +8600,18 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
   if(deptId){
     await loadGrandReqTotals(deptId);
     const allGroups = grandTaskGroups(deptId);
-    sharedGroups = Object.entries(allGroups).filter(([key, g])=>
-      g.perTeam.some(pt=>pt.team.id===currentTeamId)
-      && g.perTeam.length > 1
-      && grandReqTotals[key] && Object.values(grandReqTotals[key]).some(v=>v>0)
-    );
+    // Only teams that actually follow the department take part in its shared rotation. An
+    // Independent team was still being pooled in here, which contradicted the switch: its
+    // people got picked for another team's week and its own numbers were bypassed. Filtering
+    // the group first also means that if THIS team is the independent one, it drops out of
+    // the shared path entirely and generates the task from its own weekly needs instead.
+    sharedGroups = Object.entries(allGroups)
+      .map(([key, g])=> [key, { ...g, perTeam: g.perTeam.filter(pt=> teamFollowsDepartment(pt.team.id)) }])
+      .filter(([key, g])=>
+        g.perTeam.some(pt=>pt.team.id===currentTeamId)
+        && g.perTeam.length > 1
+        && grandReqTotals[key] && Object.values(grandReqTotals[key]).some(v=>v>0)
+      );
   }
   const otherTeamsTouched = new Set();
   sharedGroups.forEach(([key,g])=> g.perTeam.forEach(pt=>{ if(pt.team.id!==currentTeamId) otherTeamsTouched.add(pt.team.name); }));
@@ -8641,7 +8648,15 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
       for(const [key, g] of sharedGroups){
         const resultsByTeam = await generateSharedTaskPoolForWeek(g, dates, grandReqTotals[key], teamSchedules);
         for(const {team, task} of g.perTeam){
-          dates.forEach(dISO=>{ teamSchedules[team.id][dISO][task.id] = resultsByTeam[team.id][dISO] || []; });
+          dates.forEach(dISO=>{
+            // A sibling team that has never generated this week has no day objects at all, so
+            // this used to throw on the first one and abort the whole department-wide rotation
+            // — leaving the shared task empty everywhere and the status stuck on "Rotating
+            // shared tasks across the department…". Create the day if it isn't there.
+            const teamWeek = teamSchedules[team.id] = teamSchedules[team.id] || {};
+            teamWeek[dISO] = teamWeek[dISO] || {};
+            teamWeek[dISO][task.id] = resultsByTeam[team.id][dISO] || [];
+          });
         }
       }
       for(const tid of allTeamIdsInvolved){
