@@ -1600,7 +1600,10 @@ function installDemoBackend(){
     doc: (_db, colName, id) => ref(colName, id),
     collection: (_db, colName) => ({ __col: colName }),
     query: (colRef, ...clauses) => ({ __col: colRef.__col, __clauses: clauses }),
-    where: () => null,
+    // Filters used to be dropped entirely, so every query returned the whole collection. That
+    // makes preview mode quietly disagree with the real backend on anything that relies on a
+    // where() — a lookup by authUid appeared to succeed for the wrong person, for instance.
+    where: (field, op, value) => ({ __where: { field, op, value } }),
     orderBy: (field, dir) => ({ __orderBy: field, __dir: dir||'asc' }),
     limit: (n) => ({ __limit: n }),
     documentId: () => '__id__',
@@ -1637,6 +1640,23 @@ function installDemoBackend(){
         if(k.startsWith(prefix)) results.push({ id: k.slice(prefix.length), data: () => ({ ...data }) });
       }
       const clauses = colOrQuery.__clauses || [];
+      const wheres = clauses.filter(c=> c && c.__where);
+      if(wheres.length){
+        results = results.filter(r=> wheres.every(({__where:w})=>{
+          const actual = w.field === '__id__' ? r.id : r.data()[w.field];
+          switch(w.op){
+            case '==': return actual === w.value;
+            case '!=': return actual !== w.value;
+            case '>':  return actual >   w.value;
+            case '>=': return actual >=  w.value;
+            case '<':  return actual <   w.value;
+            case '<=': return actual <=  w.value;
+            case 'in': return Array.isArray(w.value) && w.value.includes(actual);
+            case 'array-contains': return Array.isArray(actual) && actual.includes(w.value);
+            default: return true;
+          }
+        }));
+      }
       const ob = clauses.find(c=>c && c.__orderBy);
       if(ob) results.sort((a,b)=>{
         const av=a.data()[ob.__orderBy], bv=b.data()[ob.__orderBy];
@@ -1763,6 +1783,38 @@ window.rotaReady = (async function boot(){
       }catch(e){ console.warn('Could not sync owner into approved list (non-fatal)', e); }
       return { status:'approved', bootstrap:false, owner:true, uid:user.uid, email:user.email, name:user.displayName||user.email };
     }
+    // Finishes an invite claim that never completed. The two writes it repairs used to happen
+    // once, on the very first login, one after another and not atomically — so if the first
+    // landed and the second didn't, the person was left half-linked forever: approved (so they
+    // get in), but with no authUid on their contact record (so an admin still sees them as
+    // "waiting to join", and the app can't find their row by uid) and no claimed_links (so
+    // they can't save their own name). Both writes are idempotent and permitted whenever the
+    // record is theirs, so running this on every login just heals whatever is missing.
+    async function repairInviteClaim(){
+      try{
+        const normalized = (user.email||'').trim().toLowerCase();
+        const idxSnap = await getDoc(doc(db, 'email_index', normalized.replace(/\//g, '_SLASH_')));
+        if(!idxSnap.exists()) return null;
+        const memberId = idxSnap.data().memberId;
+        const contactRef = doc(db, 'member_contacts', memberId);
+        const contactSnap = await getDoc(contactRef);
+        if(!contactSnap.exists()) return null;
+        const existingUid = contactSnap.data().authUid;
+        if(!existingUid){
+          console.log('[claim repair] contact had no authUid — linking it to this account');
+          await setDoc(contactRef, { email: normalized, authUid: user.uid });
+        } else if(existingUid !== user.uid){
+          return null; // somebody else's invite; leave it alone
+        }
+        const linkRef = doc(db, 'claimed_links', user.uid);
+        if(!(await getDoc(linkRef)).exists()){
+          console.log('[claim repair] claimed_links was missing — creating it');
+          await setDoc(linkRef, { memberId });
+        }
+        return memberId;
+      }catch(e){ console.error('[claim repair] failed', e); return null; }
+    }
+
     const approvedRef = doc(db, 'access_control', 'approved');
     const approvedSnap = await getDoc(approvedRef);
     if(!approvedSnap.exists()){
@@ -1776,6 +1828,9 @@ window.rotaReady = (async function boot(){
     }
     const approvedUids = approvedSnap.data().uids || [];
     if(approvedUids.includes(user.uid)){
+      // Already approved, but that says nothing about whether their contact record and
+      // claimed_links link actually got written. Heal them if not, every login.
+      await repairInviteClaim();
       return { status:'approved', bootstrap:false, uid:user.uid, email:user.email, name:user.displayName||user.email };
     }
     // Not approved yet — but an admin may have already created this person's row manually
@@ -1823,23 +1878,8 @@ window.rotaReady = (async function boot(){
           // suggestion but requiring an actual confirm, rather than silently trusting whatever
           // Google's account name happens to be (nicknames, wrong order, etc. are common).
         }
-        // claimed_links is what the rules use to let this person set their own name, and it
-        // used to be written only on the very first login — alongside the member_contacts
-        // write above, sequentially and not atomically. If that first write landed and this
-        // one didn't (a dropped connection at exactly the wrong moment), the next login saw
-        // authUid already set, took the "already mine" path, skipped this write forever, and
-        // the person was permanently stuck on "Couldn't save" at the name screen with no way
-        // out. The rule permits creating it whenever member_contacts already points at this
-        // uid, so create it if it's genuinely missing instead of assuming the first login
-        // succeeded. It can never be overwritten, so this is only ever a repair.
-        try{
-          const linkRef = doc(db,'claimed_links', user.uid);
-          const linkSnap = await getDoc(linkRef);
-          if(!linkSnap.exists()){
-            console.log('[invite check] claimed_links was missing — creating it now');
-            await setDoc(linkRef, { memberId: matchedId });
-          }
-        }catch(e){ console.error('[invite check] could not ensure claimed_links', e); }
+        // Make sure both halves of the link exist, whichever path got us here.
+        await repairInviteClaim();
         // The actual fix, either way: without this, every login after the first one used to
         // fail — approvedUids never contained this uid, and by the second login authUid was
         // already set, so the "still unclaimed" branch above no longer matched them either.
@@ -3150,6 +3190,17 @@ async function findMemberIdByUid(uid){
     snap.forEach(d=>{ found = d.id; });
     return found;
   }catch(e){ console.error('Could not look up member by uid', e); return null; }
+}
+// Anyone signed in can read email_index, so this works for a plain viewer too — unlike the
+// contacts query below, which needs a Manager's broad read access. Used to find someone's
+// existing row when their uid link is missing, instead of creating a duplicate.
+async function memberIdFromEmailIndex(email){
+  try{
+    const { db, doc, getDoc } = window.rotaDb;
+    const key = (email||'').trim().toLowerCase().replace(/\//g, '_SLASH_');
+    const snap = await getDoc(doc(db, 'email_index', key));
+    return snap.exists() ? (snap.data().memberId || null) : null;
+  }catch(e){ console.error('Could not look up member by email index', e); return null; }
 }
 // Manager/owner-only fallback (email match) — used to re-link an account whose uid connection
 // was lost without recreating a duplicate row. Requires the broad-read permission a Manager has.
@@ -9278,6 +9329,21 @@ async function bindIdentityToMember(info){
     if(foundId){ m = state.members.find(x=>x.id===foundId); if(m) await saveContact(m.id, info.email, info.uid); }
   }
   if(!m){
+    // Last resort before inventing a new row: their email may already be on the roster with
+    // the uid link missing. Creating a second row instead is how someone ended up as a
+    // phantom the app could never save — a plain viewer isn't allowed to write app_members,
+    // so it failed with "saving people — Missing or insufficient permissions" while their
+    // real row still showed as waiting to join.
+    const byEmail = await memberIdFromEmailIndex(info.email);
+    if(byEmail){
+      m = state.members.find(x=>x.id===byEmail) || null;
+      if(m){
+        console.log('[identity] matched an existing row by email; linking this account to it');
+        await saveContact(m.id, info.email, info.uid);
+      }
+    }
+  }
+  if(!m){
     // Approved (or the very first bootstrap admin) but no member row yet — create one.
     // Bootstrap admins get Admin access and land on the first team; everyone else lands
     // unassigned, with no level presumed, until an admin places them and sets their level.
@@ -9293,9 +9359,18 @@ async function bindIdentityToMember(info){
       teamId: (info.bootstrap || info.owner) ? (state.teams[0]?.id || null) : null,
       eligibility: elig([])
     };
+    const canCreateOwnRow = !!(info.bootstrap || info.owner);
     state.members.push(m);
-    await persistMembers();
-    await saveContact(id, info.email, info.uid);
+    if(canCreateOwnRow){
+      await persistMembers();
+      await saveContact(id, info.email, info.uid);
+    } else {
+      // A viewer has no permission to add themselves to the roster, and attempting it only
+      // produced a misleading "autosave is broken" banner. Nothing is written; they get a
+      // read-only session and a message naming what an admin has to do.
+      console.warn('[identity] no roster row for this account and no permission to create one');
+      showToast("You're signed in, but you're not on the roster yet — ask an admin to add your email on the People tab.", null);
+    }
   } else if(info.owner){
     // Repair, every login: whatever else changed in the stored data, the owner always ends
     // up with Admin access, on a real team, with their contact record intact.
