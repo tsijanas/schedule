@@ -180,6 +180,8 @@
   .req-table .req-total-row td{ border-top:2px solid var(--line); background:rgba(192,147,42,0.06); }
   .req-table .req-team-row td{ background:rgba(23,50,58,0.02); color:var(--ink-soft); }
   .req-table .req-diff-row td{ border-top:1px solid var(--line); }
+  .req-level-split{ margin-top:3px; font-size:9.5px; font-weight:600; line-height:1.45; color:var(--ink-faint); }
+  .req-level-split b{ font-weight:700; color:var(--ink-soft); }
   .req-table .diff-ok{ color:#2f6b3a; }
   .req-table .diff-short{ color:var(--brick-text); }
   .req-breakdown-toggle{ width:18px; height:18px; border-radius:6px; border:1px solid var(--line); background:var(--paper); color:var(--ink-soft); font-size:12px; line-height:1; cursor:pointer; padding:0; flex-shrink:0; }
@@ -5475,9 +5477,45 @@ function grandReqLockInfo(){
     },
   };
 }
+// How many people can actually be scheduled, day by day, for a given week.
+// A plain headcount overstated this in two ways: it counted people with no scheduling level
+// at all (managers, anyone still mid-setup — nobody the generator can ever place), and it
+// ignored holidays, so a week with half the team away still read as full capacity.
+// Someone holding two levels counts once in the total but appears under both levels, since
+// that's exactly what they are — one person who can fill either kind of slot.
+function availabilityByDay(members, weekMonday){
+  const scheduleable = members.filter(m=> (m.levels||[]).some(l=> LEVELS.includes(l)));
+  const byDay = {};
+  DAYS.forEach((d, i)=>{
+    const dISO = weekMonday ? iso(addDays(weekMonday, i)) : null;
+    const free = dISO ? scheduleable.filter(m=> !isOnHoliday(m.id, dISO)) : scheduleable.slice();
+    const perLevel = {};
+    LEVELS.forEach(level=> perLevel[level] = free.filter(m=> (m.levels||[]).includes(level)).length);
+    byDay[d] = { total: free.length, perLevel, off: scheduleable.length - free.length };
+  });
+  // Holidays move day to day; this doesn't. Used for the cell shading so the colour scale
+  // stays put instead of shifting every time someone books a day off.
+  return { byDay, scheduleableCount: scheduleable.length, noLevelCount: members.length - scheduleable.length };
+}
+function availabilityRowHtml(avail, label, weekMonday){
+  const weekNote = weekMonday
+    ? `<div class="muted" style="font-size:10px; font-weight:400;">${escHtml(fmtWeek(weekMonday))}</div>`
+    : '';
+  let html = `<tr class="req-team-row"><td style="font-weight:600; text-align:left;">${label}${weekNote}</td>`;
+  DAYS.forEach(d=>{
+    const a = avail.byDay[d];
+    const split = LEVELS.map(l=> `${l} <b>${a.perLevel[l]}</b>`).join('<br>');
+    const title = `${a.total} of ${avail.scheduleableCount} available`
+      + (a.off ? ` — ${a.off} on holiday` : '')
+      + (avail.noLevelCount ? ` (${avail.noLevelCount} more with no level set, not counted)` : '');
+    html += `<td class="mono" style="font-weight:600;" title="${escAttr(title)}">${a.total}<div class="req-level-split">${split}</div></td>`;
+  });
+  return html + `</tr>`;
+}
 function renderReqTab(){
   const wrap = document.getElementById('req-table-wrap');
-  const teamSize = teamMembers().length;
+  const avail = availabilityByDay(teamMembers(), currentWeekMonday);
+  const capacityScale = avail.scheduleableCount;
   const sortedTasks = sortedTasksForDisplay(state.tasks);
   const gLock = grandReqLockInfo();
   const anyLocked = sortedTasks.some(t=> gLock.lockedFor(t));
@@ -5505,7 +5543,7 @@ function renderReqTab(){
     </td>`;
     DAYS.forEach(d=>{
       const v = row[d]||0;
-      html += `<td><div class="stepper" style="${heatBg(v, teamSize)}">
+      html += `<td><div class="stepper" style="${heatBg(v, capacityScale)}">
         <button type="button" class="stepper-btn" data-dir="-1" ${frozen?'disabled':''}>−</button>
         <input type="number" min="0" class="req-input stepper-val" data-day="${d}" value="${v}" ${frozen?`readonly title="${grandLocked?'Set from the Grand Requirement':'Set via the level breakdown below'}"`:''}>
         <button type="button" class="stepper-btn" data-dir="1" ${frozen?'disabled':''}>+</button>
@@ -5520,13 +5558,11 @@ function renderReqTab(){
     html += `<td class="mono day-total" data-day="${d}" style="font-weight:700;">${sum}</td>`;
   });
   html += `</tr>`;
-  html += `<tr class="req-team-row"><td style="font-weight:600; text-align:left;">Team size</td>`;
-  DAYS.forEach(()=> html += `<td class="mono" style="font-weight:600;">${teamSize}</td>`);
-  html += `</tr>`;
+  html += availabilityRowHtml(avail, 'Available', currentWeekMonday);
   html += `<tr class="req-diff-row"><td style="font-weight:700; text-align:left;">Spare capacity</td>`;
   DAYS.forEach(d=>{
     const sum = sortedTasks.reduce((s,t)=> s+((state.req[t.id]||{})[d]||0), 0);
-    const diff = teamSize - sum;
+    const diff = avail.byDay[d].total - sum;
     html += `<td class="mono day-diff ${diff<0?'diff-short':'diff-ok'}" data-day="${d}" style="font-weight:700;">${diff>0?'+':''}${diff}</td>`;
   });
   html += `</tr>`;
@@ -5542,11 +5578,11 @@ function renderReqTab(){
   function refreshCell(inp){
     const v = Math.max(0, +inp.value || 0);
     inp.value = v;
-    inp.closest('.stepper').setAttribute('style', heatBg(v, teamSize));
+    inp.closest('.stepper').setAttribute('style', heatBg(v, capacityScale));
     const d = inp.dataset.day;
     const sum = Array.from(wrap.querySelectorAll(`.req-input[data-day="${d}"]`)).reduce((s,el)=> s + (+el.value||0), 0);
     wrap.querySelector(`.day-total[data-day="${d}"]`).textContent = sum;
-    const diff = teamSize - sum;
+    const diff = avail.byDay[d].total - sum;
     const diffCell = wrap.querySelector(`.day-diff[data-day="${d}"]`);
     diffCell.textContent = (diff>0?'+':'')+diff;
     diffCell.classList.toggle('diff-short', diff<0);
@@ -5845,7 +5881,14 @@ async function renderGrandReqTab(){
 
   const teamSizes = {};
   teamsInDepartment(currentDepartmentId).forEach(t=> teamSizes[t.id] = state.members.filter(m=>m.teamId===t.id).length);
-  const deptSize = Object.values(teamSizes).reduce((a,b)=>a+b,0);
+  // Same two corrections as the team tab: only people with a scheduling level count, and
+  // anyone on holiday that day doesn't. teamSizes above stays a plain headcount on purpose —
+  // it only decides how the department's number is divided between teams, not how many
+  // people there are to do the work.
+  const deptWeekMonday = grandWeekMonday || currentWeekMonday;
+  const deptMembers = state.members.filter(m=> Object.prototype.hasOwnProperty.call(teamSizes, m.teamId));
+  const avail = availabilityByDay(deptMembers, deptWeekMonday);
+  const capacityScale = avail.scheduleableCount;
 
   let html = '<table class="req-table"><thead><tr><th style="text-align:left;">Task</th>';
   DAYS.forEach(d=> html+=`<th>${DAY_LABELS[d]}</th>`);
@@ -5864,7 +5907,7 @@ async function renderGrandReqTab(){
     </td>`;
     DAYS.forEach(d=>{
       const v = savedRow[d]||0;
-      html += `<td><div class="stepper" style="${heatBg(v, deptSize)}" title="Hover after typing a number to see the per-team split">
+      html += `<td><div class="stepper" style="${heatBg(v, capacityScale)}" title="Hover after typing a number to see the per-team split">
         <button type="button" class="stepper-btn" data-dir="-1" ${hasBreakdown?'disabled':''}>−</button>
         <input type="number" min="0" class="grand-req-input stepper-val" data-day="${d}" value="${v}" ${hasBreakdown?'readonly title="Set via the level breakdown below"':''}>
         <button type="button" class="stepper-btn" data-dir="1" ${hasBreakdown?'disabled':''}>+</button>
@@ -5879,13 +5922,11 @@ async function renderGrandReqTab(){
     html += `<td class="mono day-total" data-day="${d}" style="font-weight:700;">${sum}</td>`;
   });
   html += `</tr>`;
-  html += `<tr class="req-team-row"><td style="font-weight:600; text-align:left;">Department size</td>`;
-  DAYS.forEach(()=> html += `<td class="mono" style="font-weight:600;">${deptSize}</td>`);
-  html += `</tr>`;
+  html += availabilityRowHtml(avail, 'Available', deptWeekMonday);
   html += `<tr class="req-diff-row"><td style="font-weight:700; text-align:left;">Spare capacity</td>`;
   DAYS.forEach(d=>{
     const sum = names.reduce((s,key)=> s + ((grandReqTotals[key]||{})[d]||0), 0);
-    const diff = deptSize - sum;
+    const diff = avail.byDay[d].total - sum;
     html += `<td class="mono day-diff ${diff<0?'diff-short':'diff-ok'}" data-day="${d}" style="font-weight:700;">${diff>0?'+':''}${diff}</td>`;
   });
   html += `</tr>`;
@@ -5915,7 +5956,7 @@ async function renderGrandReqTab(){
     DAYS.forEach(d=>{
       const sum = Array.from(wrap.querySelectorAll(`tr[data-gkey] .grand-req-input[data-day="${d}"]`)).reduce((s,el)=> s + (+el.value||0), 0);
       wrap.querySelector(`.day-total[data-day="${d}"]`).textContent = sum;
-      const diff = deptSize - sum;
+      const diff = avail.byDay[d].total - sum;
       const diffCell = wrap.querySelector(`.day-diff[data-day="${d}"]`);
       diffCell.textContent = (diff>0?'+':'')+diff;
       diffCell.classList.toggle('diff-short', diff<0);
@@ -5931,7 +5972,7 @@ async function renderGrandReqTab(){
       const inp = row.querySelector(`[data-day="${d}"]`);
       const total = +inp.value || 0;
       const stepper = inp.closest('.stepper');
-      stepper.setAttribute('style', heatBg(total, deptSize));
+      stepper.setAttribute('style', heatBg(total, capacityScale));
       const split = splitProportional(total, weights);
       stepper.title = total===0 ? 'Enter a number to see the per-team split' : split.map(s=>{
         const teamName = state.teams.find(t=>t.id===s.key)?.name || '?';
