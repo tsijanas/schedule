@@ -265,7 +265,7 @@
   .sched-table tbody tr:hover td{ background-color:rgba(192,147,42,0.08); }
   .sched-table tbody tr:hover td.taskname{ background-color:var(--gold-soft); }
   .sched-table td{ padding:6px 5px; vertical-align:top; min-width:0; height:0; }
-  .cell-inner{ display:flex; flex-direction:column; height:100%; min-height:40px; }
+  .cell-inner{ display:flex; flex-direction:column; height:100%; min-height:40px; position:relative; }
   .cell-notice{ flex:1; display:flex; align-items:center; justify-content:center; text-align:center; padding:2px 0; }
   @media (max-width: 900px){
     .sched-table{ table-layout:auto; width:auto; min-width:100%; }
@@ -370,6 +370,38 @@
   .add-select .fsel-trigger::after{ display:none; }
   .add-select .fsel-trigger > span{ overflow:visible; }
   .add-select select:hover, .add-select .fsel-trigger:hover{ border-color:var(--gold); color:var(--ink); }
+
+  /* A merged "same all week" cell keeps one bar per person, but still needs to take somebody
+     for a single day inside that run — so it gets one "+" per day, each sitting under its own
+     day column and labelled with it, plus one wider control for the whole run so the common
+     "add them for the week" case stays a single click. */
+  .add-strip{ display:flex; align-items:flex-start; margin-top:2px; }
+  .add-slot{ flex:1 1 0; min-width:0; display:flex; flex-direction:column; align-items:center; gap:1px; position:relative; }
+  .add-slot + .add-slot::before{
+    content:''; position:absolute; left:0; top:3px; bottom:3px; border-left:1px dashed rgba(0,70,84,0.16);
+  }
+  .add-strip .add-select{ margin-top:0; }
+  .add-day-lbl{ font-size:9px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; color:var(--ink-faint); }
+  td:hover .add-day-lbl{ color:var(--ink-soft); }
+  .add-run{ display:flex; justify-content:center; margin-top:3px; }
+  .add-run .add-select{ margin-top:0; }
+  .add-run .add-select select, .add-run .add-select .fsel-trigger{
+    width:auto; height:19px; border-radius:10px; padding:0 9px; font-size:9.5px; letter-spacing:0.03em;
+  }
+  /* Hovering a day's "+" lights that day's slice of the merged cell, so you can see which day
+     you're about to add to before you click — the merge itself hides the day boundaries. */
+  .day-glow{
+    position:absolute; top:0; bottom:0; border-radius:8px; pointer-events:none; opacity:0;
+    background:rgba(255,225,59,0.22); box-shadow:inset 0 0 0 1px rgba(192,147,42,0.42);
+    transition:opacity 0.12s ease;
+  }
+  .cell-inner:has(.add-slot[data-day-i="0"]:hover) .day-glow[data-day-i="0"],
+  .cell-inner:has(.add-slot[data-day-i="1"]:hover) .day-glow[data-day-i="1"],
+  .cell-inner:has(.add-slot[data-day-i="2"]:hover) .day-glow[data-day-i="2"],
+  .cell-inner:has(.add-slot[data-day-i="3"]:hover) .day-glow[data-day-i="3"],
+  .cell-inner:has(.add-slot[data-day-i="4"]:hover) .day-glow[data-day-i="4"],
+  .cell-inner:has(.add-slot[data-day-i="5"]:hover) .day-glow[data-day-i="5"],
+  .cell-inner:has(.add-slot[data-day-i="6"]:hover) .day-glow[data-day-i="6"]{ opacity:1; }
 
   .member-card, .task-card{ border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:12px; background:var(--paper); }
   .member-card-head .m-name, .task-card-head .task-name{ flex:1; font-weight:700; font-size:14.5px; min-width:0; }
@@ -7187,14 +7219,19 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
           const otherAssigned = ((rowTeamData[otherTeam.id].sched[primaryDate]||{})[otherTask.id]) || [];
           currentTeamId = otherTeam.id;
           currentSchedule = rowTeamData[otherTeam.id].sched;
-          candidates.push(...eligibleMembersForRun(otherTask.id, runDates, otherAssigned.filter(id=>id!==mid)));
+          candidates.push(...eligibleMembersForRunPartial(otherTask.id, runDates, otherAssigned.filter(id=>id!==mid)));
         });
         currentTeamId = realTeamId;
         currentSchedule = realSchedule;
         const showTeamOnCandidates = g.perTeam.length>1;
         const candidatesHtml = candidates.length===0
           ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-          : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})${showTeamOnCandidates?' — '+escHtml(state.teams.find(t=>t.id===m.teamId)?.name||''):''}</button>`).join('');
+          : candidates.map(({member:m, freeDates})=>{
+              const partial = freeDates.length < runDates.length;
+              const teamPart = showTeamOnCandidates ? ` — ${state.teams.find(t=>t.id===m.teamId)?.name||''}` : '';
+              const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${teamPart}${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
+              return `<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</button>`;
+            }).join('');
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
           <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${team.name}${isSick?' — out of office, consider replacing':' — click to see options'}">
             <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
@@ -7211,16 +7248,29 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
     const totalAssigned = g.perTeam.reduce((s,{team,task})=> s + (((rowTeamData[team.id].sched[primaryDate]||{})[task.id])||[]).length, 0);
     const shortfall = totalNeed - totalAssigned;
 
-    let combinedOptions = [];
-    for(const {team, task} of g.perTeam){
-      const assigned = ((rowTeamData[team.id].sched[primaryDate]||{})[task.id]) || [];
-      const opts = await readWithBorrowedTeamContext(team.id, grandWeekMonday, async ()=> eligibleMembersForRun(task.id, runDates, assigned), rowTeamData[team.id].sched);
-      opts.forEach(m=> combinedOptions.push({ member:m, team, task }));
-    }
+    // One set of options per add control: the whole run, plus every single day inside it,
+    // since a merged run now carries a "+" for each day it covers. Each team's options are
+    // built in one borrowed-context pass rather than one per control.
     const showTeamInLabel = g.perTeam.length>1;
-    const addSelectHtml = `<div class="add-select" data-dates="${runDates.join(',')}">
-      <select data-add="1"><option value="" data-hidden-opt="1">+</option>${combinedOptions.map(o=>`<option value="${o.team.id}::${o.task.id}::${o.member.id}">${escHtml(memberName(o.member.id))} (${(o.member.levels||[]).join('/')})${showTeamInLabel?' — '+escHtml(o.team.name):''}</option>`).join('')}</select>
-    </div>`;
+    const dateSets = runDates.length > 1 ? [runDates, ...runDates.map(d=>[d])] : [runDates];
+    const optionsByKey = {};
+    dateSets.forEach(dates=>{ optionsByKey[dates.join(',')] = []; });
+    for(const {team, task} of g.perTeam){
+      await readWithBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
+        dateSets.forEach(dates=>{
+          const assigned = ((rowTeamData[team.id].sched[dates[0]]||{})[task.id]) || [];
+          eligibleMembersForRunPartial(task.id, dates, assigned).forEach(({member, freeDates})=>{
+            const partial = freeDates.length < dates.length;
+            const label = `${memberName(member.id)} (${(member.levels||[]).join('/')})`
+              + (showTeamInLabel ? ` — ${team.name}` : '')
+              + (partial ? ` — ${freeDates.map(shortDayLabel).join(', ')} only` : '');
+            optionsByKey[dates.join(',')].push(
+              `<option value="${team.id}::${task.id}::${member.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</option>`);
+          });
+        });
+      }, rowTeamData[team.id].sched);
+    }
+    const addSelectHtml = addControlsHtml(runDates, dates=> (optionsByKey[dates.join(',')]||[]).join(''));
     let notice = '';
     if(spanned) notice = `<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`;
     else if(shortfall>0) notice = `<div class="cell-shortfall" title="${totalAssigned} of ${totalNeed} filled">needs +${shortfall}</div>`;
@@ -7282,9 +7332,13 @@ function wireGrandScheduleRow(rowEl){
           const targetId = btn.dataset.target;
           const targetMember = state.members.find(m=>m.id===targetId);
           const targetTeamId = targetMember ? targetMember.teamId : teamId;
+          // The incoming person may only be free for part of a merged run — they take those
+          // days, the outgoing person still comes off all of them.
+          const freeDates = (btn.dataset.free||'').split(',').filter(Boolean);
+          const takes = freeDates.length ? freeDates : cellDates;
           if(targetTeamId === teamId){
             // Same team as the person being replaced — the simple, single-schedule case.
-            await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplaceWithSpecific(taskId, cellDates, mid, targetId));
+            await withBorrowedTeamContext(teamId, grandWeekMonday, ()=> doReplaceWithSpecific(taskId, cellDates, mid, targetId, takes));
           } else {
             // Picked from a different team in this shared-task group — two separate schedule
             // documents are involved, so this can't be a single doReplaceWithSpecific call.
@@ -7301,7 +7355,8 @@ function wireGrandScheduleRow(rowEl){
             });
             if(targetTeamTask){
               await withBorrowedTeamContext(targetTeamId, grandWeekMonday, async ()=>{
-                cellDates.forEach(dISO=>{
+                takes.forEach(dISO=>{
+                  currentSchedule[dISO] = currentSchedule[dISO] || {};
                   currentSchedule[dISO][targetTeamTask.id] = currentSchedule[dISO][targetTeamTask.id] || [];
                   if(!currentSchedule[dISO][targetTeamTask.id].includes(targetId)) currentSchedule[dISO][targetTeamTask.id].push(targetId);
                 });
@@ -7320,7 +7375,8 @@ function wireGrandScheduleRow(rowEl){
       if(!sel.value) return;
       const [teamId, taskId, memberId] = sel.value.split('::');
       const addWrap = sel.closest('.add-select');
-      const cellDates = addWrap.dataset.dates.split(',');
+      const controlDates = addWrap.dataset.dates.split(',');
+      const cellDates = chosenAddDates(sel, controlDates);
       const key = rowEl.dataset.gkey;
       await withBorrowedTeamContext(teamId, grandWeekMonday, async ()=>{
         cellDates.forEach(dISO=>{
@@ -7616,22 +7672,59 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
       return resultsByTeam;
     }
     const need = Math.max(...neededDays.map(d=> grandReqForKey[DAYS[dates.indexOf(d)]]));
+    const freeDaysFor = (entry)=> neededDays.filter(dISO=> !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO));
+    const onDay = {};
+    neededDays.forEach(dISO=> onDay[dISO] = []);
+    const isOnThatDay = (entry, dISO)=> onDay[dISO].some(e=> e.member.id===entry.member.id);
+    const place = (entry, days)=> days.forEach(dISO=>{
+      if(isOnThatDay(entry, dISO)) return;
+      onDay[dISO].push(entry);
+      markAssigned(entry, dISO);
+      applyCombineWith(entry, dISO);
+    });
+    // Whoever can cover the most of the week comes first, so the row stays one bar wherever
+    // that's possible, then whoever has done this task least. Someone away for part of the
+    // week takes the days they are around for instead of being passed over for all of them.
     let candidates = pool.filter(entry=>
       entry.member.eligibility[entry.task.id] && levelAllowed(entry.task, entry.member.levels)
-      && neededDays.every(dISO=> !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO))
+      && freeDaysFor(entry).length > 0
     );
+    const coverage = {};
+    candidates.forEach(entry=>{ coverage[entry.member.id] = freeDaysFor(entry).length; });
     candidates.sort((a,b)=>{
+      if(coverage[a.member.id]!==coverage[b.member.id]) return coverage[b.member.id]-coverage[a.member.id];
       const ca = balanceFor(a), cb = balanceFor(b);
       if(ca!==cb) return ca-cb;
       return a.member.name.localeCompare(b.member.name);
     });
-    candidates = shuffleTiedGroups(candidates, entry=> balanceFor(entry));
-    const picked = candidates.slice(0, need);
-    neededDays.forEach(dISO=> picked.forEach(entry=>{ markAssigned(entry, dISO); applyCombineWith(entry, dISO); }));
+    candidates = shuffleTiedGroups(candidates, entry=> `${coverage[entry.member.id]}_${balanceFor(entry)}`);
+    candidates.slice(0, need).forEach(entry=> place(entry, freeDaysFor(entry)));
+
+    // Days left short by an absence get filled one day at a time, so the shared task is
+    // genuinely covered even though the week no longer reads as a single bar.
+    neededDays.forEach(dISO=>{
+      const dayNeed = grandReqForKey[DAYS[dates.indexOf(dISO)]] || 0;
+      while(onDay[dISO].length < dayNeed){
+        let dayPool = pool.filter(entry=>
+          entry.member.eligibility[entry.task.id] && levelAllowed(entry.task, entry.member.levels)
+          && !isOnThatDay(entry, dISO) && !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO));
+        if(dayPool.length===0) break;
+        dayPool.sort((a,b)=>{
+          const la = existingLoad(a.member.id, dISO).length, lb = existingLoad(b.member.id, dISO).length;
+          if(la!==lb) return la-lb;
+          const ca = balanceFor(a), cb = balanceFor(b);
+          if(ca!==cb) return ca-cb;
+          return a.member.name.localeCompare(b.member.name);
+        });
+        dayPool = shuffleTiedGroups(dayPool, entry=> `${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
+        place(dayPool[0], [dISO]);
+      }
+    });
+
     dates.forEach(dISO=>{
       g.perTeam.forEach(({team})=>{
         resultsByTeam[team.id][dISO] = neededDays.includes(dISO)
-          ? picked.filter(entry=>entry.team.id===team.id).map(entry=>entry.member.id)
+          ? onDay[dISO].filter(entry=>entry.team.id===team.id).map(entry=>entry.member.id)
           : [];
       });
     });
@@ -7731,7 +7824,11 @@ async function generateWeek(weekMon, opts){
   const weeklyTasks = tasksSorted.filter(t=>t.sameAllWeek);
   const normalTasks = tasksSorted.filter(t=>!t.sameAllWeek);
 
-  // Pass 1 — tasks that must be the same person for every day they're needed this week (e.g. QA)
+  // Pass 1 — tasks meant to be the same people every day they're needed this week (e.g. QA).
+  // "Same all week" is the shape the week is built in, not a promise that nobody can be away:
+  // someone off for part of the week still belongs on the task for the days they are actually
+  // available, so candidates are judged day by day. Whoever can cover the whole run is ranked
+  // first, so the row still comes out as one merged bar wherever that's genuinely possible.
   weeklyTasks.forEach(task=>{
     const neededDays = dates.filter(d=> (state.req[task.id]||{})[dayKeyOf(d)] > 0 && !isBankHoliday(d));
     if(neededDays.length===0){ dates.forEach(d=> schedule[d][task.id]=[]); return; }
@@ -7749,61 +7846,93 @@ async function generateWeek(weekMon, opts){
       if(maxForLevel>0) hasLevelBreakdown = true;
     });
 
-    // "Kept" here specifically means someone already covering every single needed day —
-    // that's the only thing "same person all week" can mean. Partial/inconsistent existing
-    // coverage isn't treated as kept; this task just generates fresh, same as full mode.
-    let kept = [];
-    if(mode!=='full'){
-      let candidateKept = teamMembers().filter(m=> neededDays.every(d=> ((keepSchedule[d]&&keepSchedule[d][task.id])||[]).includes(m.id)));
-      if(mode==='update'){
-        candidateKept = candidateKept.filter(m=> m.eligibility[task.id] && neededDays.every(d=>!isOnHoliday(m.id,d)));
+    // Who ends up on the task each needed day. Everything below writes through place(), so a
+    // person can hold some days of the week without holding all of them.
+    const onDay = {};
+    neededDays.forEach(d=> onDay[d] = []);
+    const place = (m, days)=> days.forEach(d=>{
+      if(onDay[d] && !onDay[d].includes(m.id)){
+        onDay[d].push(m.id);
+        markAssigned(m.id, d, task.id);
+        bump(m.id, task.id);
       }
-      kept = candidateKept;
-      kept.forEach(m=> neededDays.forEach(d=>{ markAssigned(m.id, d, task.id); bump(m.id, task.id); }));
-    }
-
-    if(hasLevelBreakdown){
-      const picked = [...kept];
-      LEVELS.forEach(level=>{
-        const alreadyAtLevel = picked.filter(m=>(m.levels||[]).includes(level)).length;
-        const levelNeed = Math.max(0, levelBreakdownMax[level] - alreadyAtLevel);
-        if(levelNeed<=0) return;
-        let levelCandidates = teamMembers().filter(m=>
-          (m.levels||[]).includes(level) && m.eligibility[task.id] &&
-          neededDays.every(d=> !isOnHoliday(m.id,d) && canAssign(m, task, d)) &&
-          !picked.some(p=>p.id===m.id)
-        );
-        levelCandidates.sort((a,b)=>{
-          const ca=(bal[a.id]&&bal[a.id][task.id])||0, cb=(bal[b.id]&&bal[b.id][task.id])||0;
-          return ca-cb || a.name.localeCompare(b.name);
-        });
-        levelCandidates = shuffleTiedGroups(levelCandidates, m=> (bal[m.id]&&bal[m.id][task.id])||0);
-        const newOnes = levelCandidates.slice(0, levelNeed);
-        neededDays.forEach(d=> newOnes.forEach(m=>{ markAssigned(m.id, d, task.id); bump(m.id, task.id); }));
-        picked.push(...newOnes);
-      });
-      dates.forEach(d=> schedule[d][task.id] = neededDays.includes(d) ? picked.map(m=>m.id) : (schedule[d][task.id]||[]));
-      return;
-    }
-
-    const stillNeed = Math.max(0, need - kept.length);
-    let newlyPicked = [];
-    if(stillNeed>0){
-      let candidates = teamMembers().filter(m=>
-        m.eligibility[task.id] && levelAllowed(task, m.levels) &&
-        neededDays.every(d=> !isOnHoliday(m.id,d) && canAssign(m, task, d)) &&
-        !kept.some(k=>k.id===m.id)
-      );
-      candidates.sort((a,b)=>{
+    });
+    const freeDaysFor = (m)=> neededDays.filter(d=> !isOnHoliday(m.id,d) && canAssign(m, task, d));
+    const isPlaced = (m)=> neededDays.some(d=> onDay[d].includes(m.id));
+    // Most of the week first — a full-week person keeps the row a single bar — then whoever
+    // has done this task least, same fairness rule as everywhere else.
+    const rankByCoverage = (pool)=>{
+      const coverage = {};
+      pool.forEach(m=> coverage[m.id] = freeDaysFor(m).length);
+      pool.sort((a,b)=>{
+        if(coverage[a.id]!==coverage[b.id]) return coverage[b.id]-coverage[a.id];
         const ca=(bal[a.id]&&bal[a.id][task.id])||0, cb=(bal[b.id]&&bal[b.id][task.id])||0;
         return ca-cb || a.name.localeCompare(b.name);
       });
-      candidates = shuffleTiedGroups(candidates, m=> (bal[m.id]&&bal[m.id][task.id])||0);
-      newlyPicked = candidates.slice(0, stillNeed);
-      neededDays.forEach(d=> newlyPicked.forEach(m=>{ markAssigned(m.id, d, task.id); bump(m.id, task.id); }));
+      return shuffleTiedGroups(pool, m=> `${coverage[m.id]}_${(bal[m.id]&&bal[m.id][task.id])||0}`);
+    };
+
+    // Fill/Update keeps what's already on the task, day by day. Partial coverage is a
+    // legitimate shape for one of these weeks now, so it's kept rather than thrown away;
+    // Update still drops days someone has since been booked off for.
+    if(mode!=='full'){
+      teamMembers().forEach(m=>{
+        let days = neededDays.filter(d=> ((keepSchedule[d]&&keepSchedule[d][task.id])||[]).includes(m.id));
+        if(mode==='update') days = m.eligibility[task.id] ? days.filter(d=> !isOnHoliday(m.id,d)) : [];
+        if(days.length) place(m, days);
+      });
     }
-    const picked = [...kept, ...newlyPicked];
-    dates.forEach(d=> schedule[d][task.id] = neededDays.includes(d) ? picked.map(m=>m.id) : (schedule[d][task.id]||[]));
+
+    // Each new person takes every day of the run they're free for — all of it when they're
+    // around all week, the rest of it when they're not.
+    const pickForWeek = (count, extraFilter)=>{
+      if(count<=0) return;
+      const pool = teamMembers().filter(m=>
+        m.eligibility[task.id] && levelAllowed(task, m.levels) && !isPlaced(m)
+        && freeDaysFor(m).length>0 && (extraFilter ? extraFilter(m) : true));
+      rankByCoverage(pool).slice(0, count).forEach(m=> place(m, freeDaysFor(m)));
+    };
+    if(hasLevelBreakdown){
+      LEVELS.forEach(level=>{
+        const have = teamMembers().filter(m=> (m.levels||[]).includes(level) && isPlaced(m)).length;
+        pickForWeek(levelBreakdownMax[level] - have, m=> (m.levels||[]).includes(level));
+      });
+    } else {
+      pickForWeek(need - teamMembers().filter(isPlaced).length, null);
+    }
+
+    // Days left short by somebody's absence get topped up on their own, the way a day-by-day
+    // task would — the week stops being one bar, but it is actually covered.
+    neededDays.forEach(d=>{
+      const dayKey = dayKeyOf(d);
+      const dayLevels = (state.reqLevels[task.id] && state.reqLevels[task.id][dayKey]) || {};
+      const topUpDay = (count, extraFilter)=>{
+        for(let i=0;i<count;i++){
+          let pool = teamMembers().filter(m=>
+            m.eligibility[task.id] && levelAllowed(task, m.levels) && !onDay[d].includes(m.id)
+            && !isOnHoliday(m.id,d) && canAssign(m, task, d) && (extraFilter ? extraFilter(m) : true));
+          if(pool.length===0) return;
+          pool.sort((a,b)=>{
+            const ca=(bal[a.id]&&bal[a.id][task.id])||0, cb=(bal[b.id]&&bal[b.id][task.id])||0;
+            return ca-cb || a.name.localeCompare(b.name);
+          });
+          pool = shuffleTiedGroups(pool, m=> (bal[m.id]&&bal[m.id][task.id])||0);
+          place(pool[0], [d]);
+        }
+      };
+      LEVELS.forEach(level=>{
+        const levelNeed = dayLevels[level] || 0;
+        if(levelNeed<=0) return;
+        const levelHave = onDay[d].filter(mid=>{
+          const m = state.members.find(x=>x.id===mid);
+          return m && (m.levels||[]).includes(level);
+        }).length;
+        topUpDay(levelNeed - levelHave, m=> (m.levels||[]).includes(level));
+      });
+      topUpDay(((state.req[task.id]||{})[dayKey] || 0) - onDay[d].length, null);
+    });
+
+    dates.forEach(d=> schedule[d][task.id] = neededDays.includes(d) ? onDay[d].slice() : (schedule[d][task.id]||[]));
   });
 
   // Pass 2 — everything else, day by day, most-constrained tasks first
@@ -8121,7 +8250,7 @@ function buildScheduleTableHtml(teamId){
       else if(shortfall > 0) notice = `<div class="cell-shortfall" title="${assigned.length} of ${need} filled">needs +${shortfall}</div>`;
       else if(isBankHoliday(primaryDate) && assigned.length===0) notice = `<div class="cell-bank-hol-note">Bank holiday — add someone if you still need coverage</div>`;
       html += `<div class="cell-notice">${notice}</div>`;
-      html += `<div class="add-select"><select data-add="1"><option value="" data-hidden-opt="1">+</option>${eligibleOptionsForRun(task.id, run.dates, assigned).join('')}</select></div>`;
+      html += addControlsHtml(run.dates, dates=> eligibleOptionsForRun(task.id, dates, ((currentSchedule[dates[0]]||{})[task.id])||[]).join(''));
       html += `</div></td>`;
     });
     html += '</tr>';
@@ -8151,8 +8280,12 @@ function drawScheduleGrid(){
       if(!sel.value) return;
       const td = sel.closest('td');
       const taskId = td.dataset.task;
-      const cellDates = td.dataset.dates.split(',');
-      cellDates.forEach(dISO=>{
+      // Each control carries the dates it covers: a merged cell now has one per day inside it
+      // as well as one for the whole run, so the cell's own dates are only the fallback.
+      const addWrap = sel.closest('.add-select');
+      const controlDates = ((addWrap && addWrap.dataset.dates) || td.dataset.dates).split(',');
+      const addDates = chosenAddDates(sel, controlDates);
+      addDates.forEach(dISO=>{
         currentSchedule[dISO] = currentSchedule[dISO] || {};
         currentSchedule[dISO][taskId] = currentSchedule[dISO][taskId] || [];
         if(!currentSchedule[dISO][taskId].includes(sel.value)) currentSchedule[dISO][taskId].push(sel.value);
@@ -8160,6 +8293,9 @@ function drawScheduleGrid(){
       await saveWeek(iso(currentWeekMonday), currentSchedule);
       balanceCache = null;
       drawScheduleGrid();
+      if(addDates.length < controlDates.length){
+        showToast(`Added for ${addDates.map(shortDayLabel).join(', ')} — off for the rest`);
+      }
     });
   });
 }
@@ -8175,10 +8311,14 @@ document.addEventListener('click', (e)=>{
 // submenu, since one would get visually clipped by the schedule grid's own horizontal-scroll
 // container (overflow-x:auto), which cuts off anything positioned to escape sideways past it.
 function mainBarMenuHtml(taskId, cellDates, excludeMid, currentlyAssigned){
-  const candidates = eligibleMembersForRun(taskId, cellDates, (currentlyAssigned||[]).filter(id=>id!==excludeMid));
+  const candidates = eligibleMembersForRunPartial(taskId, cellDates, (currentlyAssigned||[]).filter(id=>id!==excludeMid));
   const candidatesHtml = candidates.length===0
     ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-    : candidates.map(m=>`<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}">${escHtml(m.name || shortDisplayName(m.id, []))} (${(m.levels||[]).join('/')})</button>`).join('');
+    : candidates.map(({member:m, freeDates})=>{
+        const partial = freeDates.length < cellDates.length;
+        const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
+        return `<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</button>`;
+      }).join('');
   return `<button class="bar-menu-item" data-action="delete">Delete</button>
     <button class="bar-menu-item" data-action="replace">Replace with next in line</button>
     <div class="bar-menu-section-label">Replace with</div>
@@ -8208,7 +8348,8 @@ function wireOneBarMenu(menu){
         await doReplace(taskId, cellDates, mid);
       } else if(action==='replace-with-pick'){
         closeAllBarMenus();
-        await doReplaceWithSpecific(taskId, cellDates, mid, btn.dataset.target);
+        const freeDates = (btn.dataset.free||'').split(',').filter(Boolean);
+        await doReplaceWithSpecific(taskId, cellDates, mid, btn.dataset.target, freeDates.length?freeDates:null);
       }
     });
   });
@@ -8231,16 +8372,22 @@ function findPersonAssignmentsThisWeek(memberId, sched){
   });
   return Object.entries(byTask).map(([taskId, dates])=>({ taskId, dates: dates.sort() }));
 }
-async function doReplaceWithSpecific(taskId, cellDates, outgoingId, incomingId){
+// incomingDates, when given, are the only days the incoming person takes — they may be free
+// for just part of a merged run, in which case the outgoing person still comes off the whole
+// run and the remaining days show as short rather than quietly booking someone who's away.
+async function doReplaceWithSpecific(taskId, cellDates, outgoingId, incomingId, incomingDates){
   const incoming = state.members.find(m=>m.id===incomingId);
+  const takes = (incomingDates && incomingDates.length) ? incomingDates : cellDates;
   cellDates.forEach(dISO=>{
     currentSchedule[dISO][taskId] = (currentSchedule[dISO][taskId]||[]).filter(x=>x!==outgoingId);
-    if(!currentSchedule[dISO][taskId].includes(incomingId)) currentSchedule[dISO][taskId].push(incomingId);
+    if(takes.includes(dISO) && !currentSchedule[dISO][taskId].includes(incomingId)) currentSchedule[dISO][taskId].push(incomingId);
   });
   await saveWeek(iso(currentWeekMonday), currentSchedule);
   balanceCache = null;
   drawScheduleGrid();
-  showToast(`Replaced with ${incoming?incoming.name:'them'}`);
+  showToast(takes.length < cellDates.length
+    ? `Replaced with ${incoming?incoming.name:'them'} for ${takes.map(shortDayLabel).join(', ')} — the rest needs cover`
+    : `Replaced with ${incoming?incoming.name:'them'}`);
   logAudit('schedule.replace_specific', { taskId, teamId: currentTeamId, to: incoming?incoming.name:incomingId });
 }
 async function doReplace(taskId, cellDates, outgoingId){
@@ -8270,17 +8417,75 @@ async function doReplace(taskId, cellDates, outgoingId){
   else if(anyReplaced) showToast('Replaced where possible — no one eligible for the rest');
   else showToast('No one eligible or available — removed instead');
 }
-// For a task cell's "+add" dropdown: only offer someone who's actually free (eligible, right
-// level, not on holiday, no conflicting task) on every date the cell covers. A normal single
-// day is just a one-date run, so this one function correctly covers both cases.
+// For a task cell's "+add" dropdown. Someone free every day of the run is offered plainly;
+// someone free for only part of it is still offered, labelled with the days they can actually
+// take — being off on the Wednesday of a Mon–Fri task is no reason to be left off the other
+// four days. The option carries those days in data-free, and the handler assigns exactly
+// them. A normal single day is just a one-date run, so this covers both cases.
 function eligibleOptionsForRun(taskId, dateISOs, already){
-  return eligibleMembersForRun(taskId, dateISOs, already).map(m=>`<option value="${m.id}">${escHtml(memberName(m.id))} (${(m.levels||[]).join('/')})</option>`);
+  return eligibleMembersForRunPartial(taskId, dateISOs, already).map(({member, freeDates})=>{
+    const levels = (member.levels||[]).join('/');
+    const partial = freeDates.length < dateISOs.length;
+    const label = `${memberName(member.id)} (${levels})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
+    return `<option value="${member.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</option>`;
+  });
 }
 function eligibleMembersForRun(taskId, dateISOs, already){
   const task = state.tasks.find(t=>t.id===taskId);
   return teamMembers()
     .filter(m=> m.eligibility[taskId] && levelAllowed(task, m.levels) && !already.includes(m.id)
       && dateISOs.every(d=> !isOnHoliday(m.id,d) && canAssignNow(m, task, d)));
+}
+// Same eligibility test as above, applied day by day instead of all-or-nothing: everyone who
+// can take at least one date of the run, each with the dates they're genuinely free on.
+// Callers assign only those dates, so a part-week absence costs someone the days they're away
+// and nothing more.
+function eligibleMembersForRunPartial(taskId, dateISOs, already){
+  const task = state.tasks.find(t=>t.id===taskId);
+  const out = [];
+  teamMembers().forEach(m=>{
+    if(!m.eligibility[taskId] || !levelAllowed(task, m.levels) || (already||[]).includes(m.id)) return;
+    const freeDates = dateISOs.filter(d=>
+      !(((currentSchedule[d]||{})[taskId])||[]).includes(m.id)
+      && !isOnHoliday(m.id,d) && canAssignNow(m, task, d));
+    if(freeDates.length) out.push({ member:m, freeDates });
+  });
+  return out;
+}
+// Which weekday an ISO date falls on, and its short label — the grids mostly work in day
+// index order, but an add control only knows the date it belongs to.
+function dayKeyForDateISO(dateISO){
+  const dt = new Date(dateISO+'T00:00:00');
+  return DAYS[(dt.getDay()+6)%7];
+}
+function shortDayLabel(dateISO){ return DAY_LABELS[dayKeyForDateISO(dateISO)].slice(0,3); }
+// The add controls for one cell: a single "+" on a one-day cell, and on a merged run one "+"
+// per day — aligned under its own day column, labelled with that day — plus a wider
+// "+ Mon–Fri" for the whole run. optionsFor(dates) returns the <option> markup for that set
+// of dates, so the team grid and the department grid can each build their own options while
+// sharing this layout.
+function addControlsHtml(runDates, optionsFor){
+  const control = (dates, label, cls)=>
+    `<div class="add-select${cls?' '+cls:''}" data-dates="${dates.join(',')}">`
+    + `<select data-add="1"><option value="" data-hidden-opt="1">${escHtml(label)}</option>${optionsFor(dates)}</select>`
+    + `</div>`;
+  if(runDates.length < 2) return control(runDates, '+');
+  const n = runDates.length;
+  const glows = runDates.map((d,i)=>
+    `<div class="day-glow" data-day-i="${i}" style="left:${(i*100/n).toFixed(3)}%; width:${(100/n).toFixed(3)}%;"></div>`).join('');
+  const slots = runDates.map((d,i)=>
+    `<div class="add-slot" data-day-i="${i}">${control([d], '+')}<span class="add-day-lbl">${shortDayLabel(d)}</span></div>`).join('');
+  const rangeLabel = `+ ${shortDayLabel(runDates[0])}–${shortDayLabel(runDates[n-1])}`;
+  return `<div class="add-strip">${glows}${slots}</div><div class="add-run">${control(runDates, rangeLabel, 'add-run-select')}</div>`;
+}
+// The dates an add control should actually write to: whatever the chosen person is free for,
+// per data-free, falling back to the control's own dates.
+function chosenAddDates(selectEl, controlDates){
+  const opt = selectEl.selectedOptions && selectEl.selectedOptions[0];
+  const free = opt && opt.dataset ? opt.dataset.free : '';
+  if(!free) return controlDates;
+  const dates = free.split(',').filter(Boolean);
+  return dates.length ? dates : controlDates;
 }
 
 // What tasks does this person already hold on this date, according to the schedule as it
