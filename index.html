@@ -751,26 +751,6 @@
 
 <div id="boot-cover"><div class="boot-spinner" aria-label="Loading" role="status"></div></div>
 
-<div class="identity-modal" id="name-confirm-modal" style="z-index:1001;">
-  <div class="identity-card" style="max-width:400px;">
-    <h2>What's your name?</h2>
-    <p class="muted" style="margin:4px 0 14px 0; font-size:12.5px;">Shown to your team on the schedule. Only a manager can change it after this.</p>
-    <div class="field">
-      <label>First name</label>
-      <input type="text" id="name-confirm-first" autocomplete="given-name" placeholder="Jamie">
-    </div>
-    <div class="field" style="margin-top:12px;">
-      <label>Surname</label>
-      <input type="text" id="name-confirm-last" autocomplete="family-name" placeholder="Rivera">
-    </div>
-    <div class="row" style="margin-top:18px;">
-      <div class="spacer"></div>
-      <button class="btn small" id="name-confirm-submit">Continue</button>
-    </div>
-    <div class="error" id="name-confirm-error" style="display:none; margin-top:12px; background:var(--brick-soft); color:var(--brick-text); border:1px solid var(--brick); border-radius:8px; padding:9px 11px; font-size:12.5px; font-weight:500;"></div>
-  </div>
-</div>
-
 <div class="app mode-viewer" id="app-root">
   <div class="sidebar" id="sidebar">
     <div class="sidebar-panel">
@@ -3175,7 +3155,51 @@ async function loadMemberContactsForAdmin(){
       state.members = state.members.map(m=>{ const { email, authUid, ...rest } = m; return rest; });
       await persistMembers();
     }
+    await backfillNamesFromEmails();
   }catch(e){ console.error('Could not load member contacts', e); }
+}
+// Gives every nameless person a name derived from their email, stored on their app_members
+// record. It has to be stored rather than derived on the fly, because email addresses live in
+// member_contacts, which only Managers and the owner may read — a plain viewer looking at the
+// schedule can't see anyone's address, so without this they saw "(name pending)" on the bars
+// no matter who they were. This runs whenever a Manager or Admin session loads contacts (the
+// only sessions permitted to write it), is idempotent, and never touches a name somebody has
+// already set — a real name typed on the People tab always wins.
+async function backfillNamesFromEmails(){
+  let changed = 0;
+  for(const m of state.members){
+    if(m.name && m.name.trim()) continue;
+    const email = memberContacts[m.id] && memberContacts[m.id].email;
+    const derived = nameFromEmail(email);
+    if(!derived) continue;
+    m.name = derived;
+    changed++;
+  }
+  if(changed){
+    console.log(`[names] filled in ${changed} blank name${changed===1?'':'s'} from email addresses`);
+    await persistMembers(true); // silent: a failure here is cosmetic, and the derived names
+    // still show for this session; the next admin session tries again
+  }
+}
+// The display name someone gets before a manager types a real one: their email address with
+// the domain dropped and the separators turned back into spaces, so
+// "loreta.zemaite@example.com" reads as "Loreta Zemaite" on a schedule bar rather than as a
+// raw address (or, as it used to, "(name pending)"). Nobody is ever asked to type their own
+// name anymore — signing in with the invited email is the whole of it — so this is what every
+// name in the app falls back to, and it's written into app_members (see backfillNamesFromEmails)
+// precisely because plain viewers aren't allowed to read anyone's email address.
+function nameFromEmail(email){
+  const local = (email||'').trim().toLowerCase().split('@')[0] || '';
+  if(!local) return '';
+  const words = local
+    .replace(/\+.*$/, '')        // drop a "+tag" suffix
+    .replace(/[._\-]+/g, ' ')    // the three separators real corporate addresses use
+    .trim()
+    .split(/\s+/)
+    .map(w=> w.replace(/\d+$/, '')) // "smith2@" — a disambiguating number isn't part of a name
+    .filter(Boolean)
+    .map(w=> w.charAt(0).toUpperCase() + w.slice(1));
+  return words.join(' ') || local;
 }
 // Firestore document IDs can't contain "/" — real emails essentially never do, but guard it
 // anyway rather than let one weird address throw.
@@ -3760,7 +3784,7 @@ function applyRegistryFilters(){
     const teamName = state.teams.find(t=>t.id===m.teamId)?.name || '—';
     return `<div class="invite-row">
       <span class="invite-status-dot ${isPending?'pending':'registered'}" title="${isPending?'Pending — has not signed in yet':'Registered — signed in'}"></span>
-      <span class="invite-name">${m.name?escHtml(m.name):'<span class="muted" style="font-weight:400;">(name pending)</span>'}</span>
+      <span class="invite-name">${escHtml(memberName(m.id))}</span>
       <span class="muted invite-email">${escHtml(contact.email)}</span>
       <span class="muted" style="font-size:11px;">${escHtml(teamName)}</span>
       <div class="spacer"></div>
@@ -3806,7 +3830,7 @@ function renderInvitesCard(){
     const contact = memberContacts[m.id];
     return `<div class="invite-row">
       <span class="invite-status-dot pending" title="Pending — has not signed in yet"></span>
-      <span class="invite-name">${m.name ? escHtml(m.name) : '<span class="muted" style="font-weight:400;">(name pending)</span>'}</span>
+      <span class="invite-name">${escHtml(memberName(m.id))}</span>
       <span class="muted invite-email">${escHtml(contact.email)}</span>
       <div class="spacer"></div>
       <button type="button" class="btn-remove-x btn-remove-invite" data-mid="${m.id}" title="Cancel this invite">×</button>
@@ -4087,7 +4111,7 @@ function renderTeamTab(){
     html += `<tr class="member-card" data-mid="${m.id}" data-search="${escAttr((m.name+' '+((contact&&contact.email)||'')).toLowerCase())}" data-levels="${escAttr((m.levels||[]).join(','))}" data-role="${m.role||'viewer'}" data-tasks="${escAttr(eligibleIds.join(','))}">
       <td class="pt-sel"><input type="checkbox" class="card-select-check" data-mid="${m.id}"></td>
       <td class="pt-name">
-        <input type="text" class="m-name" value="${escAttr(m.name)}" placeholder="${m.name?'Name':escAttr((contact&&contact.email)||'Name (set when they join)')}">
+        <input type="text" class="m-name" value="${escAttr(m.name||'')}" placeholder="${escAttr(nameFromEmail((contact&&contact.email)||'') || 'Name')}">
         <div class="member-card-summary">${roleBadge}${pendingInviteBadge}</div>
         <div class="field-error name-dupe-error"></div>
       </td>
@@ -4339,6 +4363,9 @@ function renderTeamTab(){
       const contactUpdates = [];
       cards.forEach(card=>{
         const { email, ...updated } = readRow(card);
+        // A row left with an empty name box keeps the email-derived name rather than going
+        // blank — a blank name is what used to render as "(name pending)" for everyone.
+        if(!(updated.name||'').trim()) updated.name = nameFromEmail(email);
         state.members = state.members.map(m=> m.id===updated.id ? { ...m, ...updated } : m);
         contactUpdates.push({ id: updated.id, email });
       });
@@ -4633,7 +4660,10 @@ document.getElementById('invite-confirm').addEventListener('click', async ()=>{
     const id = 'm_'+Math.random().toString(36).slice(2,9);
     const level = (role==='admin') ? null : (row.level || defaultLevel || null);
     state.members.push({
-      id, name: row.name || '', levels: level ? [level] : [],
+      // Whatever name was pasted alongside the address wins; otherwise the address itself
+      // becomes the name (minus the domain), so this person is identifiable on every schedule
+      // from the moment they're invited — including to plain viewers, who can't read emails.
+      id, name: row.name || nameFromEmail(row.email), levels: level ? [level] : [],
       isAdmin: role==='admin', role: role||null, managerDeptId,
       teamId, eligibility: level ? defaultEligibilityForTeamLevel(teamId, level) : {}
     });
@@ -6808,7 +6838,7 @@ async function selectReplaceSearchPerson(mid){
   replaceSearchSelectedPerson = person;
   document.getElementById('replace-search-step-find').style.display = 'none';
   document.getElementById('replace-search-step-list').style.display = 'block';
-  document.getElementById('replace-search-person-name').textContent = person.name || '(name pending)';
+  document.getElementById('replace-search-person-name').textContent = memberName(person.id);
   await renderReplaceSearchAssignments();
 }
 async function renderReplaceSearchAssignments(){
@@ -8099,24 +8129,30 @@ function renderYourWeekSummary(){
   wrap.innerHTML = buildYourWeekTableHtml(currentSchedule, currentWeekMonday, me);
   attachYourWeekClicks(wrap, '#sched-grid-wrap');
 }
-// Someone who's been invited but hasn't signed in yet has no name of their own yet, and used
-// to come back as an empty string — which rendered as a blank option in the Holidays picker and
-// a blank bar on the calendar, making them look absent rather than just unconfirmed. Fall back
-// the same way shortDisplayName does, so an admin can book time off for people regardless of
-// whether they've confirmed their account.
+// The one pair of functions that answers "what do we call this person". A name a manager typed
+// wins; if there isn't one yet it falls back to their email address minus the domain, which is
+// what a Manager/Admin session also writes into the record itself (backfillNamesFromEmails) so
+// that plain viewers — who aren't allowed to read email addresses — see the same thing. The
+// "(name pending)" placeholder is now only reachable for a record that has neither a name nor
+// a readable email, i.e. someone invited whose row no admin session has caught up with yet.
+function fullNameFor(m){
+  if(!m) return '';
+  if(m.name && m.name.trim()) return m.name.trim();
+  return nameFromEmail(memberContacts[m.id] && memberContacts[m.id].email);
+}
 function memberName(id){
   const m = state.members.find(x=>x.id===id);
   if(!m) return '?';
-  if(m.name) return m.name;
-  const email = memberContacts[id] && memberContacts[id].email;
-  if(email){ const prefix = email.split('@')[0]; if(prefix) return prefix; }
-  return '(name pending)';
+  return fullNameFor(m) || '(name pending)';
 }
-// True for anyone who hasn't signed in and set their own name yet — callers use it to tag such
-// a person in a picker so it's obvious why the name reads as an email prefix.
+// True for anyone who has an invite on file but has never signed in — callers use it to tag
+// such a person in a picker. Read from the contact record rather than from a blank name,
+// because names are now filled in from the email address up front, so a set name no longer
+// says anything about whether that person has actually logged in.
 function isUnconfirmedMember(id){
-  const m = state.members.find(x=>x.id===id);
-  return !!(m && !m.name);
+  const contact = memberContacts[id];
+  if(contact) return !contact.authUid;
+  return false;
 }
 // One <option> per person, with pending people clearly marked but still fully selectable.
 function holidayWhoOptionsHtml(members){
@@ -8131,28 +8167,31 @@ function holidayWhoOptionsHtml(members){
 // first name — only then does the surname's first initial get appended, so "Titas" stays
 // "Titas" almost everywhere, but becomes "Titas Š." specifically where it would otherwise be
 // ambiguous. Reads straight from the existing full name — no separate field, nothing to migrate.
-// True while someone's real name isn't set yet but shortDisplayName is showing their email
-// prefix instead — used by callers to apply a slightly smaller size, since an email prefix
-// tends to run longer than a first name and would otherwise crowd a compact schedule bar.
+// True while there's no name on the record at all and the bar is showing something derived
+// instead — used by callers to apply a slightly smaller size, since a derived name tends to
+// run longer than a first name and would otherwise crowd a compact schedule bar.
 function isPendingDisplayName(memberId){
   const m = state.members.find(x=>x.id===memberId);
-  return !!(m && !m.name);
+  return !!(m && !(m.name && m.name.trim()));
 }
 function shortDisplayName(memberId, scopeMemberIds){
   const m = state.members.find(x=>x.id===memberId);
-  if(!m || !m.name){
-    const email = m && memberContacts[memberId] && memberContacts[memberId].email;
-    if(email){ const prefix = email.split('@')[0]; if(prefix) return prefix; }
-    return '(name pending)';
-  }
-  const parts = m.name.trim().split(/\s+/).filter(Boolean);
-  const firstName = parts[0] || m.name;
+  if(!m) return '?';
+  // Goes through fullNameFor, so someone with no stored name still gets the first-name-only
+  // treatment on their email-derived name ("loreta.zemaite@…" shows as "Loreta", not as the
+  // whole address) — the same as everybody else on the bar.
+  const full = fullNameFor(m);
+  if(!full) return '(name pending)';
+  const parts = full.split(/\s+/).filter(Boolean);
+  const firstName = parts[0] || full;
   if(parts.length < 2) return firstName; // no surname on file to disambiguate with anyway
   const collision = (scopeMemberIds||[]).some(otherId=>{
     if(otherId===memberId) return false;
-    const other = state.members.find(x=>x.id===otherId);
-    if(!other || !other.name) return false;
-    const otherFirst = other.name.trim().split(/\s+/)[0] || '';
+    // fullNameFor again, not other.name: a colleague still on an email-derived name shares a
+    // first name just as confusingly as one with a typed name does.
+    const otherFull = fullNameFor(state.members.find(x=>x.id===otherId));
+    if(!otherFull) return false;
+    const otherFirst = otherFull.split(/\s+/)[0] || '';
     return otherFirst.toLowerCase() === firstName.toLowerCase();
   });
   if(!collision) return firstName;
@@ -9480,108 +9519,51 @@ document.getElementById('btn-pending-signout').addEventListener('click', ()=>{ w
 document.getElementById('btn-pending-refresh').addEventListener('click', ()=>{ window.location.reload(); });
 document.getElementById('btn-change-identity').addEventListener('click', ()=>{ window.rotaAuth.signOut(); });
 
-// Shown once, the first time someone lands with a blank name — pre-filled with whatever
-// Google's account provided as a starting suggestion, but requires an actual confirm rather
-// than silently trusting it (nicknames, wrong order, etc. are common on real Google accounts).
-// Returns a promise that resolves once they've submitted, so bindIdentityToMember can await
-// it and only proceed to the real app afterward.
-function showNameConfirmScreen(m, suggestedName){
-  return new Promise(resolve=>{
-    const modal = document.getElementById('name-confirm-modal');
-    const firstInput = document.getElementById('name-confirm-first');
-    const lastInput = document.getElementById('name-confirm-last');
-    const errorEl = document.getElementById('name-confirm-error');
-    const parts = (suggestedName||'').trim().split(/\s+/).filter(Boolean);
-    firstInput.value = parts[0] || '';
-    lastInput.value = parts.slice(1).join(' ');
-    modal.classList.add('open');
-    firstInput.focus();
-    if(firstInput.value) firstInput.select();
-    const onSubmit = async ()=>{
-      const submitBtn = document.getElementById('name-confirm-submit');
-      const first = firstInput.value.trim();
-      const last = lastInput.value.trim();
-      if(!first || !last){
-        (first ? lastInput : firstInput).focus();
-        return;
-      }
-      if(errorEl){ errorEl.style.display = 'none'; errorEl.textContent = ''; }
-      submitBtn.disabled = true;
-      submitBtn.textContent = 'Saving…';
-      const fullName = `${first} ${last}`;
-      const { db, doc, updateDoc } = window.rotaDb;
-      // Retries a few times with a short delay before ever showing an error — this save
-      // depends on claimed_links, written moments earlier in resolveAccess as part of this
-      // same first-ever login, and that write occasionally hasn't fully propagated yet by the
-      // time this permission check runs. A brief pause and retry smooths that over invisibly,
-      // rather than the person having to notice the failure and manually refresh themselves.
-      let lastError = null;
-      // Backs off rather than three quick tries: rule propagation after a first-ever login can
-      // take a couple of seconds, and a person who sees an error here has no idea it would have
-      // worked a moment later.
-      const waits = [0, 500, 1000, 1800];
-      for(let attempt=0; attempt<waits.length; attempt++){
-        if(waits[attempt]) await new Promise(r=>setTimeout(r, waits[attempt]));
-        try{
-          // Deliberately NOT persistMembers() here — that writes the whole member document via
-          // setDoc, and the rule permitting this exact write requires the diff to touch nothing
-          // but name. A dedicated, minimal updateDoc can never accidentally include another
-          // field, so it can't silently fail the same way a full-document write could.
-          await updateDoc(doc(db, 'app_members', m.id), { name: fullName });
-          m.name = fullName;
-          membersSyncSnapshot.set(m.id, memberContentString(m)); // keep persistMembers' own change-detection in sync, so it doesn't try to re-write this same field later and hit the same rule
-          modal.classList.remove('open');
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Continue';
-          resolve();
-          return;
-        }catch(e){
-          lastError = e;
-          console.error(`[name confirm] save attempt ${attempt+1} failed:`, e);
-        }
-      }
-      // Every attempt failed. Before showing an error, check whether the name is actually
-      // already set — an earlier attempt of theirs may have landed, or an admin may have
-      // filled it in meanwhile, in which case there is nothing left to do and blocking them
-      // would be nonsense.
+// Nobody is ever asked to type their own name. Signing in with the invited email address is
+// the entire flow: the name shown to the team is derived from that address (see nameFromEmail)
+// and a manager can replace it with a real one on the People tab whenever they like.
+//
+// This replaces a "What's your name?" screen that blocked the app on a Firestore write the
+// security rules only permit under a very narrow set of conditions (a claimed_links marker
+// pointing at exactly this row, the stored name still exactly empty, and the whole resulting
+// document passing validation). Whenever any of that didn't hold, the write was rejected, the
+// screen applied the typed name locally and let the person in anyway — so the record stayed
+// blank and the screen came back on every single login. Removing the screen removes the write,
+// and with it the whole failure mode.
+//
+// The write below is the same minimal update, but it is now genuinely optional: it only fills
+// in a name the app already derived for itself, it never blocks the UI, and if the rules
+// reject it the next Manager session backfills the same value (see backfillNamesFromEmails).
+function ensureNameFromEmail(m, email){
+  const derived = nameFromEmail(email);
+  if(!derived) return;
+  if(m.name && m.name.trim()) return;
+  m.name = derived;          // local and immediate — the app renders on this, not on the write
+  storeDerivedName(m, derived); // deliberately not awaited: nothing about signing in waits on it
+}
+async function storeDerivedName(m, derived){
+  try{
+    const { db, doc, updateDoc } = window.rotaDb;
+    // Deliberately NOT persistMembers() — that writes the whole member document, and the rule
+    // that lets someone touch their own record at all requires the diff to affect nothing but
+    // name. A dedicated updateDoc can't accidentally include another field.
+    // Retried with a short backoff because on a first-ever login this depends on claimed_links,
+    // written moments earlier in resolveAccess, which occasionally hasn't propagated yet.
+    const waits = [0, 600, 1500];
+    for(let attempt=0; attempt<waits.length; attempt++){
+      if(waits[attempt]) await new Promise(r=>setTimeout(r, waits[attempt]));
       try{
-        const { getDoc } = window.rotaDb;
-        const fresh = await getDoc(doc(db, 'app_members', m.id));
-        const storedName = fresh.exists() ? (fresh.data().name||'') : '';
-        if(storedName.trim()){
-          m.name = storedName;
-          membersSyncSnapshot.set(m.id, memberContentString(m));
-          modal.classList.remove('open');
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Continue';
-          resolve();
-          return;
+        await updateDoc(doc(db, 'app_members', m.id), { name: derived });
+        membersSyncSnapshot.set(m.id, memberContentString(m)); // keep persistMembers' change
+        // detection in sync, so it doesn't try to re-write this field and hit the same rule
+        return;
+      }catch(e){
+        if(attempt === waits.length-1){
+          console.warn('[names] could not store the email-derived name; the next Manager session fills it in', e);
         }
-      }catch(e){ console.error('[name confirm] could not re-read the member record', e); }
-
-      // Genuinely could not save. Being stuck on this screen is the worst outcome available —
-      // it locks someone out of the whole app over a display name — so let them in with the
-      // name they typed applied locally and say plainly that an admin needs to set it. The
-      // error code is shown because "please try again" told nobody anything, and this is the
-      // one screen where nobody technical is watching the console.
-      const code = (lastError && (lastError.code || lastError.message)) || 'unknown error';
-      console.error('[name confirm] giving up; letting them through without saving. Last error:', lastError);
-      m.name = fullName; // local only — an admin can set it properly on the People tab
-      if(errorEl){
-        errorEl.innerHTML = `Couldn't save your name (${escHtml(String(code))}). `
-          + `Taking you in anyway — ask an admin to set your name on the People tab.`;
-        errorEl.style.display = 'block';
       }
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Continue';
-      setTimeout(()=>{ modal.classList.remove('open'); resolve(); }, 3000);
-    };
-    // Re-entering this screen must not stack a second handler on the same button, or one
-    // click would fire the save twice. Replacing the node drops any handler from last time.
-    const oldBtn = document.getElementById('name-confirm-submit');
-    oldBtn.replaceWith(oldBtn.cloneNode(true));
-    document.getElementById('name-confirm-submit').addEventListener('click', onSubmit);
-  });
+    }
+  }catch(e){ console.warn('[names] could not store the email-derived name', e); }
 }
 async function bindIdentityToMember(info){
   let mid = await findMemberIdByUid(info.uid);
@@ -9615,7 +9597,7 @@ async function bindIdentityToMember(info){
       // managers list before the writes below, since the rules require it to already be true
     const id = 'm_'+Math.random().toString(36).slice(2,9);
     m = {
-      id, name: '',
+      id, name: nameFromEmail(info.email),
       levels: [],
       isAdmin: !!(info.bootstrap || info.owner),
       role: (info.bootstrap || info.owner) ? 'admin' : null,
@@ -9654,12 +9636,14 @@ async function bindIdentityToMember(info){
     await ensureInManagersList(info.uid);
     if(m.isAdmin) await ensureInAdminsList(info.uid);
   }
+  // No name on file yet? Derive one from the email they just signed in with and get on with
+  // it — no screen, no confirmation, nothing for them to do.
   if(!m.name || m.name.trim()===''){
-    await showNameConfirmScreen(m, info.name);
+    ensureNameFromEmail(m, info.email);
   }
   viewerIdentityId = m.id;
   currentAuthUid = info.uid;
-  document.getElementById('viewer-identity-name').textContent = m.name;
+  document.getElementById('viewer-identity-name').textContent = memberName(m.id);
   currentTeamId = m.teamId;
   if(m.role==='manager' && m.managerDeptId){
     const ownTeam = state.teams.find(t=>t.id===m.teamId);
