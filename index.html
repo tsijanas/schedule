@@ -7357,8 +7357,9 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
             <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">
-            <button class="bar-menu-item" data-action="delete">Delete</button>
+            <button class="bar-menu-item" data-action="delete">${runDates.length>1?'Delete — whole run':'Delete'}</button>
             <button class="bar-menu-item" data-action="replace">Replace with next in line</button>
+            ${splitDaysMenuHtml(runDates)}
             <div class="bar-menu-section-label">Replace with</div>
             ${candidatesHtml}
           </div>
@@ -7442,6 +7443,13 @@ function wireGrandScheduleRow(rowEl){
             balanceCache = null;
           });
           logAudit('grand_schedule.remove', { team: state.teams.find(t=>t.id===teamId)?.name, task: taskId });
+          await refreshOneGrandScheduleRow(key);
+        } else if(action==='remove-day'){
+          closeAllBarMenus();
+          const dayISO = btn.dataset.day;
+          await withBorrowedTeamContext(teamId, grandWeekMonday,
+            ()=> removeFromOneDay(taskId, dayISO, mid, ()=> refreshOneGrandScheduleRow(key)));
+          logAudit('grand_schedule.remove_day', { team: state.teams.find(t=>t.id===teamId)?.name, task: taskId, day: dayISO });
           await refreshOneGrandScheduleRow(key);
         } else if(action==='replace'){
           closeAllBarMenus();
@@ -8450,8 +8458,9 @@ function mainBarMenuHtml(taskId, cellDates, excludeMid, currentlyAssigned){
         const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
         return `<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</button>`;
       }).join('');
-  return `<button class="bar-menu-item" data-action="delete">Delete</button>
+  return `<button class="bar-menu-item" data-action="delete">${cellDates.length>1?'Delete — whole run':'Delete'}</button>
     <button class="bar-menu-item" data-action="replace">Replace with next in line</button>
+    ${splitDaysMenuHtml(cellDates)}
     <div class="bar-menu-section-label">Replace with</div>
     ${candidatesHtml}`;
 }
@@ -8473,6 +8482,10 @@ function wireOneBarMenu(menu){
         });
         await saveWeek(iso(currentWeekMonday), currentSchedule);
         balanceCache = null;
+        drawScheduleGrid();
+      } else if(action==='remove-day'){
+        closeAllBarMenus();
+        await removeFromOneDay(taskId, btn.dataset.day, mid);
         drawScheduleGrid();
       } else if(action==='replace'){
         closeAllBarMenus();
@@ -8502,6 +8515,34 @@ function findPersonAssignmentsThisWeek(memberId, sched){
     });
   });
   return Object.entries(byTask).map(([taskId, dates])=>({ taskId, dates: dates.sort() }));
+}
+// Takes one person off one day, leaving the rest of their run alone — the mid-week change a
+// merged bar otherwise made awkward. Undoable, because a mis-clicked day in a five-day run is
+// easy to do and was previously only fixable by hand. redraw() differs per view (the team grid
+// redraws itself; the department grid refreshes one row), so the caller passes its own.
+async function removeFromOneDay(taskId, dateISO, memberId, refreshAfterUndo){
+  const before = ((currentSchedule[dateISO]||{})[taskId] || []).slice();
+  if(!before.includes(memberId)) return false;
+  currentSchedule[dateISO] = currentSchedule[dateISO] || {};
+  currentSchedule[dateISO][taskId] = before.filter(x=>x!==memberId);
+  await saveWeek(iso(currentWeekMonday), currentSchedule);
+  balanceCache = null;
+  // Captured now, not read at undo time: by then the person may well be looking at a
+  // different team or a different week, and the undo has to put the day back where it came
+  // from rather than wherever they happen to be standing.
+  const teamId = currentTeamId;
+  const weekMonday = new Date(currentWeekMonday.getTime());
+  pushUndo(async ()=>{
+    await withBorrowedTeamContext(teamId, weekMonday, async ()=>{
+      currentSchedule[dateISO] = currentSchedule[dateISO] || {};
+      currentSchedule[dateISO][taskId] = before.slice();
+      await saveWeek(iso(currentWeekMonday), currentSchedule);
+      balanceCache = null;
+    });
+    if(refreshAfterUndo) await refreshAfterUndo();
+  });
+  showToast(`${shortDisplayName(memberId, [])} taken off ${dayAndDateLabel(dateISO)} — still on the other days`, undoLast);
+  return true;
 }
 // incomingDates, when given, are the only days the incoming person takes — they may be free
 // for just part of a merged run, in which case the outgoing person still comes off the whole
@@ -8590,6 +8631,18 @@ function dayKeyForDateISO(dateISO){
   return DAYS[(dt.getDay()+6)%7];
 }
 function shortDayLabel(dateISO){ return DAY_LABELS[dayKeyForDateISO(dateISO)].slice(0,3); }
+// "Wed 17" — enough to pick a specific day out of a merged run without counting columns.
+function dayAndDateLabel(dateISO){
+  return `${shortDayLabel(dateISO)} ${Number((dateISO||'').slice(8,10)) || ''}`.trim();
+}
+// The "take one day off" section of a bar's menu. Only on a bar that covers more than one day:
+// on a single-day cell, Delete already is "remove from this day". Splitting a run used to mean
+// deleting the person from the whole thing and adding them back day by day.
+function splitDaysMenuHtml(cellDates){
+  if(!cellDates || cellDates.length < 2) return '';
+  return `<div class="bar-menu-section-label">Take off one day</div>`
+    + cellDates.map(dISO=>`<button class="bar-menu-item" data-action="remove-day" data-day="${escAttr(dISO)}">${escHtml(dayAndDateLabel(dISO))}</button>`).join('');
+}
 // The add controls for one cell: a single "+" on a one-day cell, and on a merged run one "+"
 // per day — aligned under its own day column, labelled with that day — plus a wider
 // "+ Mon–Fri" for the whole run. optionsFor(dates) returns the <option> markup for that set
