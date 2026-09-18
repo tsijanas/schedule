@@ -751,6 +751,32 @@
 
 <div id="boot-cover"><div class="boot-spinner" aria-label="Loading" role="status"></div></div>
 
+<!-- Opened from "Edit name" in the sidebar, by anyone, at any time — never on the way in.
+     Signing in is complete on its own (the name starts out as the email address minus its
+     domain); this is here so a person can put their real name, spelled their way, in front of
+     their team without waiting on a manager. It reports a failure honestly rather than
+     pretending to have saved. -->
+<div class="identity-modal" id="my-name-modal" style="z-index:1001;">
+  <div class="identity-card" style="max-width:400px;">
+    <h2>Your name</h2>
+    <p class="muted" style="margin:4px 0 14px 0; font-size:12.5px;">This is what your team sees on the schedule. Change it as often as you like — a manager can edit it too.</p>
+    <div class="field">
+      <label for="my-name-first">First name</label>
+      <input type="text" id="my-name-first" autocomplete="given-name" placeholder="Loreta">
+    </div>
+    <div class="field" style="margin-top:12px;">
+      <label for="my-name-last">Surname <span class="muted" style="font-weight:400;">— optional</span></label>
+      <input type="text" id="my-name-last" autocomplete="family-name" placeholder="Žemaitė">
+    </div>
+    <div class="row" style="margin-top:18px;">
+      <button class="btn secondary small" id="my-name-cancel">Cancel</button>
+      <div class="spacer"></div>
+      <button class="btn small" id="my-name-save">Save</button>
+    </div>
+    <div class="error" id="my-name-error" style="display:none; margin-top:12px; background:var(--brick-soft); color:var(--brick-text); border:1px solid var(--brick); border-radius:8px; padding:9px 11px; font-size:12.5px; font-weight:500;"></div>
+  </div>
+</div>
+
 <div class="app mode-viewer" id="app-root">
   <div class="sidebar" id="sidebar">
     <div class="sidebar-panel">
@@ -765,7 +791,11 @@
       <div id="viewer-identity-box">
         <span class="muted-on-dark">Signed in as</span>
         <div class="viewer-identity-name" id="viewer-identity-name">—</div>
-        <button class="link-on-dark" id="btn-change-identity">Sign out</button>
+        <div style="display:flex; align-items:baseline; gap:8px;">
+          <button class="link-on-dark" id="btn-edit-my-name">Edit name</button>
+          <span class="muted-on-dark" style="opacity:0.35; font-size:11.5px;">·</span>
+          <button class="link-on-dark" id="btn-change-identity">Sign out</button>
+        </div>
       </div>
 
       <div class="team-switcher admin-only" id="dept-switcher-wrap" style="display:none;">
@@ -2209,6 +2239,18 @@ async function loadState(){
   state.members.forEach(mem=>{
     if(!mem.teamId){ mem.teamId = state.teams[0].id; membersMigrated = true; }
     if(!mem.levels){ mem.levels = mem.level ? [mem.level] : ['IC1']; membersMigrated = true; }
+    // Two fields the security rules insist on for any write of a member record, and that the
+    // People tab reads without checking: a row saved by an old enough version of the app can
+    // be missing either one, and that made the row un-saveable by anyone — a Manager editing
+    // it got "couldn't save people", and the person themselves couldn't even set their own
+    // name, because validation rejects the whole document regardless of what changed.
+    if(typeof mem.name !== 'string'){ mem.name = mem.name == null ? '' : String(mem.name); membersMigrated = true; }
+    if(!mem.eligibility || typeof mem.eligibility !== 'object'){ mem.eligibility = {}; membersMigrated = true; }
+    if(!Array.isArray(mem.levels)){
+      // A single level stored as a bare string keeps its value rather than being dropped.
+      mem.levels = (typeof mem.levels === 'string' && mem.levels) ? [mem.levels] : [];
+      membersMigrated = true;
+    }
     // One-time migration: Admin access used to be implied by having "Manager" checked as a
     // level. Now it's its own separate field — anyone who had that access keeps it explicitly,
     // but Level itself no longer grants anything on its own going forward.
@@ -2436,7 +2478,9 @@ async function logAudit(action, details){
     await setDoc(doc(db, 'audit_log', id), {
       ts: Date.now(),
       actorUid: currentAuthUid || null,
-      actorName: (viewerIdentityId && state.members.find(m=>m.id===viewerIdentityId)?.name) || 'Unknown',
+      actorName: (viewerIdentityId && memberName(viewerIdentityId)) || 'Unknown', // same name
+      // the rest of the app shows, so the log doesn't read "Unknown" for someone whose record
+      // is still on an email-derived name
       teamId: currentTeamId || null,
       action,
       details: details || {}
@@ -3265,7 +3309,11 @@ async function memberIdFromEmailIndex(email){
 async function findMemberIdByEmail(email){
   try{
     const { db, collection, query, where, getDocs } = window.rotaDb;
-    const snap = await getDocs(query(collection(db,'member_contacts'), where('email','==', email)));
+    // Lowercased to match how every email is stored (saveContact) — this used to be handed
+    // the address straight from the auth token, which keeps whatever capitalisation the
+    // identity provider has on file, so an equality query found nothing for those accounts.
+    const normalized = (email||'').trim().toLowerCase();
+    const snap = await getDocs(query(collection(db,'member_contacts'), where('email','==', normalized)));
     let found = null;
     snap.forEach(d=>{ found = d.id; });
     return found;
@@ -9518,6 +9566,108 @@ function closePendingModal(){
 document.getElementById('btn-pending-signout').addEventListener('click', ()=>{ window.rotaAuth.signOut(); });
 document.getElementById('btn-pending-refresh').addEventListener('click', ()=>{ window.location.reload(); });
 document.getElementById('btn-change-identity').addEventListener('click', ()=>{ window.rotaAuth.signOut(); });
+
+// ---- "Edit name": self-service, optional, and never in the way of signing in ----
+// Anyone can set their own name here, as often as they like. The write is the same minimal
+// one-field update storeDerivedName uses, and the rules now permit it on your own row whether
+// or not a name is already there (see firestore.rules, isSelfNameUpdate) — being able to set
+// it exactly once, while blank, is what left people unable to fix their own name at all.
+function openMyNameModal(){
+  const m = state.members.find(x=>x.id===viewerIdentityId);
+  if(!m){
+    showToast("You're not on the roster yet, so there's no record to name — ask an admin to add your email on the People tab.", null);
+    return;
+  }
+  const errorEl = document.getElementById('my-name-error');
+  errorEl.style.display = 'none';
+  errorEl.textContent = '';
+  // Prefilled with whatever is showing right now — usually the name derived from their email
+  // address — so correcting the spelling is an edit, not a retype from nothing.
+  const parts = (fullNameFor(m) || '').trim().split(/\s+/).filter(Boolean);
+  const firstInput = document.getElementById('my-name-first');
+  const lastInput = document.getElementById('my-name-last');
+  firstInput.value = parts[0] || '';
+  lastInput.value = parts.slice(1).join(' ');
+  document.getElementById('my-name-modal').classList.add('open');
+  firstInput.focus();
+  firstInput.select();
+}
+function closeMyNameModal(){
+  document.getElementById('my-name-modal').classList.remove('open');
+}
+async function saveMyName(){
+  const m = state.members.find(x=>x.id===viewerIdentityId);
+  if(!m){ closeMyNameModal(); return; }
+  const saveBtn = document.getElementById('my-name-save');
+  const errorEl = document.getElementById('my-name-error');
+  const first = document.getElementById('my-name-first').value.trim();
+  const last = document.getElementById('my-name-last').value.trim();
+  // A surname is optional. The old screen required one and, if it was missing, did nothing at
+  // all on click — no save, no message — which read as a dead button.
+  const fullName = [first, last].filter(Boolean).join(' ').replace(/\s+/g, ' ');
+  if(!fullName){
+    errorEl.textContent = 'Type at least a first name.';
+    errorEl.style.display = 'block';
+    document.getElementById('my-name-first').focus();
+    return;
+  }
+  if(fullName.length > 100){
+    errorEl.textContent = 'That name is too long — 100 characters at most.';
+    errorEl.style.display = 'block';
+    return;
+  }
+  if(fullName === (m.name||'').trim()){ closeMyNameModal(); return; } // nothing to write
+  errorEl.style.display = 'none';
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  const previous = m.name;
+  let lastError = null;
+  try{
+    const { db, doc, updateDoc } = window.rotaDb;
+    // Same reasoning as storeDerivedName: a dedicated one-field updateDoc, never
+    // persistMembers, because only the name key may change on your own row.
+    for(const wait of [0, 600, 1500]){
+      if(wait) await new Promise(r=>setTimeout(r, wait));
+      try{
+        await updateDoc(doc(db, 'app_members', m.id), { name: fullName });
+        lastError = null;
+        break;
+      }catch(e){ lastError = e; }
+    }
+  }catch(e){ lastError = e; }
+  saveBtn.disabled = false;
+  saveBtn.textContent = 'Save';
+  if(lastError){
+    // Says what actually happened instead of quietly keeping a local-only name that vanishes
+    // on the next reload — that mismatch is exactly what made this look fixed when it wasn't.
+    const code = (lastError.code || lastError.message || 'unknown error');
+    console.error('[my name] could not save', lastError);
+    m.name = previous;
+    errorEl.textContent = `Couldn't save your name (${code}). Nothing was changed — ask a manager to set it on the People tab.`;
+    errorEl.style.display = 'block';
+    return;
+  }
+  m.name = fullName;
+  membersSyncSnapshot.set(m.id, memberContentString(m)); // so persistMembers doesn't re-send
+  // this same field later as part of a whole-document write it isn't permitted to make
+  closeMyNameModal();
+  refreshAfterNameChange();
+  showToast('Name updated');
+  logAudit('member.self_rename', { memberId: m.id });
+}
+// Everywhere a name can appear re-renders from state, so refreshing the sidebar label and
+// re-running whichever tab is open is enough — no reload, on any of the three view modes.
+function refreshAfterNameChange(){
+  const label = document.getElementById('viewer-identity-name');
+  if(label && viewerIdentityId) label.textContent = memberName(viewerIdentityId);
+  const active = document.querySelector('.nav-item.active');
+  if(active) active.click();
+}
+document.getElementById('btn-edit-my-name').addEventListener('click', openMyNameModal);
+document.getElementById('my-name-cancel').addEventListener('click', closeMyNameModal);
+document.getElementById('my-name-save').addEventListener('click', saveMyName);
+document.getElementById('my-name-last').addEventListener('keydown', e=>{ if(e.key==='Enter') saveMyName(); });
+document.getElementById('my-name-first').addEventListener('keydown', e=>{ if(e.key==='Enter') saveMyName(); });
 
 // Nobody is ever asked to type their own name. Signing in with the invited email address is
 // the entire flow: the name shown to the team is derived from that address (see nameFromEmail)

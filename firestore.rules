@@ -51,6 +51,39 @@ service cloud.firestore {
         && request.auth.uid in get(/databases/$(database)/documents/access_control/managers).data.uids;
     }
 
+    // The signed-in account's own email address, lowercased. Everything this app stores is
+    // lowercased (see saveContact), but request.auth.token.email is whatever the identity
+    // provider has on file — a Google account whose address is spelled with a capital letter
+    // hands back that capital. Every comparison below goes through this, because an exact
+    // comparison against the stored form silently locked such a person out of their own
+    // record: their contact claim failed, so no claimed_links marker was written, so the rule
+    // letting them set their own name never matched, and the app fell back to "couldn't save"
+    // on every single login.
+    function myEmail() {
+      return isSignedIn() && 'email' in request.auth.token && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+    function contactEmailOf(memberId) {
+      return get(/databases/$(database)/documents/member_contacts/$(memberId)).data.email.lower();
+    }
+    // "Is this person's own record" — answered two independent ways, so one missing marker
+    // can't lock somebody out of their own row: the claimed_links marker written when they
+    // claimed their invite, or the contact record that already carries their auth uid.
+    function isMyMemberRow(memberId) {
+      return isSignedIn() && (
+        (
+          exists(/databases/$(database)/documents/claimed_links/$(request.auth.uid))
+          && get(/databases/$(database)/documents/claimed_links/$(request.auth.uid)).data.memberId == memberId
+        )
+        || (
+          exists(/databases/$(database)/documents/member_contacts/$(memberId))
+          && 'authUid' in get(/databases/$(database)/documents/member_contacts/$(memberId)).data
+          && get(/databases/$(database)/documents/member_contacts/$(memberId)).data.authUid == request.auth.uid
+        )
+      );
+    }
+
     // ---- Input validation ----
     // Everything above answers "who can write here." These answer "is what they're writing
     // actually sane" — required fields present, correct types, reasonable length caps. This
@@ -93,8 +126,11 @@ service cloud.firestore {
       allow read: if isSignedIn() && request.auth.uid == uid;
       allow create: if isOwner() || isManagerUid() || (
         isSignedIn() && request.auth.uid == uid
+        && exists(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId))
+        && 'authUid' in get(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId)).data
         && get(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId)).data.authUid == request.auth.uid
-        && get(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId)).data.email == request.auth.token.email
+        && 'email' in get(/databases/$(database)/documents/member_contacts/$(request.resource.data.memberId)).data
+        && contactEmailOf(request.resource.data.memberId) == myEmail()
       );
       allow delete: if isOwner() || isManagerUid();
       allow update: if false;
@@ -116,8 +152,15 @@ service cloud.firestore {
     // own contact doc, constrained to a query on their own uid, which is how the app finds
     // "which member row is me" on login without needing broad read access. ----
     match /member_contacts/{memberId} {
-      allow read: if isOwner() || isManagerUid() || resource.data.authUid == request.auth.uid
-        || (isSignedIn() && resource.data.authUid == null && resource.data.email == request.auth.token.email);
+      // An unclaimed record is one whose authUid is null OR absent entirely — older records
+      // predate that field, and reading a key that isn't there is an evaluation error, which
+      // denies the whole rule. Spelling both cases out is what keeps those records claimable.
+      function isUnclaimedContact() {
+        return !('authUid' in resource.data) || resource.data.authUid == null;
+      }
+      allow read: if isOwner() || isManagerUid()
+        || (isSignedIn() && 'authUid' in resource.data && resource.data.authUid == request.auth.uid)
+        || (isSignedIn() && isUnclaimedContact() && 'email' in resource.data && resource.data.email.lower() == myEmail());
       allow create: if (isOwner() || isManagerUid()) && isValidContact(request.resource.data);
       allow update: if isValidContact(request.resource.data) && (
         isOwner() || isManagerUid()
@@ -126,8 +169,9 @@ service cloud.firestore {
           // own verified email, but only by setting authUid to exactly their own uid — the
           // email itself can't change, and nothing else about the record can be touched this way.
           isSignedIn()
-          && resource.data.authUid == null
-          && resource.data.email == request.auth.token.email
+          && isUnclaimedContact()
+          && 'email' in resource.data
+          && resource.data.email.lower() == myEmail()
           && request.resource.data.email == resource.data.email
           && request.resource.data.authUid == request.auth.uid
         )
@@ -147,23 +191,35 @@ service cloud.firestore {
     // everyone) — but WRITING someone's team/level/name now genuinely requires being a Manager
     // or the owner, enforced here, not just hidden behind a button in the UI.
     match /app_members/{memberId} {
+      // Setting your own name, on your own row, and nothing else. Three things about this are
+      // deliberate, and each of them was a way the previous version of this rule failed:
+      //
+      //  - It does NOT require the stored name to still be blank. That condition meant a name
+      //    could be set exactly once and never corrected — and since the app now fills a name
+      //    in from the email address, "once" had already been spent before anyone typed
+      //    anything, leaving people permanently unable to fix their own name.
+      //  - It does NOT require the whole document to pass isValidMember. A row saved by an
+      //    older version of the app can be missing a field validation now insists on (most
+      //    often eligibility), and that made every write of that row fail, including a write
+      //    of nothing but the person's own name.
+      //  - It identifies the row two ways (see isMyMemberRow), so a missing claimed_links
+      //    marker alone can't make somebody's own record unwritable.
+      //
+      // It is still narrow: only the name key may change, it has to be a non-empty string
+      // within the same length cap validation uses elsewhere, and team, level, role, admin
+      // rights and eligibility remain Manager-only. Somebody can rename themselves on the
+      // schedule, which is the point — a Manager can rename them back on the People tab.
+      function isSelfNameUpdate() {
+        return isMyMemberRow(memberId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 100;
+      }
       allow read: if isApproved();
       allow create: if (isOwner() || isManagerUid()) && isValidMember(request.resource.data);
-      allow update: if isValidMember(request.resource.data) && (
-        isOwner() || isManagerUid()
-        || (
-          // Self-claim name: someone who just registered via an email-only invite may set
-          // their own name — but only once (while it's still blank), only on the exact
-          // record they were just linked to, and this can never touch team, level, role, or
-          // eligibility — those stay admin-only, same as always.
-          isSignedIn()
-          && exists(/databases/$(database)/documents/claimed_links/$(request.auth.uid))
-          && get(/databases/$(database)/documents/claimed_links/$(request.auth.uid)).data.memberId == memberId
-          && resource.data.name == ''
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])
-          && request.resource.data.name.size() > 0
-        )
-      );
+      allow update: if ((isOwner() || isManagerUid()) && isValidMember(request.resource.data))
+        || isSelfNameUpdate();
       allow delete: if isOwner() || isManagerUid();
     }
 
@@ -268,10 +324,13 @@ service cloud.firestore {
     // when the one matching document would itself be perfectly readable. Scoping by path
     // instead sidesteps that: the subcollection IS the scope, so the rule doesn't need a
     // where-filter to reason about at all.
+    // Same two-way check the member row uses (isMyMemberRow): this used to depend on the
+    // claimed_links marker alone, so anyone whose marker was never written — the case-
+    // sensitive email comparison above was one way that happened — couldn't read their own
+    // notifications or mark one as read, even though the app could see perfectly well whose
+    // they were.
     function isOwnNotifPath(memberId) {
-      return isSignedIn()
-        && exists(/databases/$(database)/documents/claimed_links/$(request.auth.uid))
-        && get(/databases/$(database)/documents/claimed_links/$(request.auth.uid)).data.memberId == memberId;
+      return isMyMemberRow(memberId);
     }
     match /notifications/{memberId}/items/{notifId} {
       allow read: if isOwner() || isManagerUid() || isOwnNotifPath(memberId);
