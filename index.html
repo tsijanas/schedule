@@ -3203,27 +3203,69 @@ async function loadMemberContactsForAdmin(){
   }catch(e){ console.error('Could not load member contacts', e); }
 }
 // Gives every nameless person a name derived from their email, stored on their app_members
-// record. It has to be stored rather than derived on the fly, because email addresses live in
-// member_contacts, which only Managers and the owner may read — a plain viewer looking at the
-// schedule can't see anyone's address, so without this they saw "(name pending)" on the bars
-// no matter who they were. This runs whenever a Manager or Admin session loads contacts (the
-// only sessions permitted to write it), is idempotent, and never touches a name somebody has
-// already set — a real name typed on the People tab always wins.
+// record, so that it survives for everyone rather than only for whoever could read the email.
+// Runs whenever a Manager or Admin session loads contacts (the only sessions permitted to
+// write it), is idempotent, and never touches a name somebody has already set — a real name
+// typed on the People tab always wins.
+//
+// One write per person, not one persistMembers() for the lot. persistMembers sends whole
+// member documents through a single Promise.all, so one row that validation rejects (a
+// malformed birthday, a field an old version never wrote) takes down every other name in the
+// same batch — and it did so silently, which is how a manager could see names on screen that
+// viewers never got. A one-field updateDoc per person can only fail for that one person, and
+// anything that does fail is now named in the console and counted in a toast.
 async function backfillNamesFromEmails(){
-  let changed = 0;
+  const todo = [];
   for(const m of state.members){
     if(m.name && m.name.trim()) continue;
-    const email = memberContacts[m.id] && memberContacts[m.id].email;
-    const derived = nameFromEmail(email);
-    if(!derived) continue;
-    m.name = derived;
-    changed++;
+    const derived = nameFromEmail(memberContacts[m.id] && memberContacts[m.id].email);
+    if(derived) todo.push({ m, derived });
   }
-  if(changed){
-    console.log(`[names] filled in ${changed} blank name${changed===1?'':'s'} from email addresses`);
-    await persistMembers(true); // silent: a failure here is cosmetic, and the derived names
-    // still show for this session; the next admin session tries again
+  if(todo.length === 0) return;
+  const { db, doc, updateDoc } = window.rotaDb;
+  let stored = 0;
+  const failures = [];
+  for(const { m, derived } of todo){
+    m.name = derived; // locally first, so this session shows the name either way
+    try{
+      await updateDoc(doc(db, 'app_members', m.id), { name: derived });
+      membersSyncSnapshot.set(m.id, memberContentString(m));
+      stored++;
+    }catch(e){
+      failures.push(`${m.id} (${derived}): ${e.code || e.message || e}`);
+    }
   }
+  console.log(`[names] stored ${stored} of ${todo.length} name${todo.length===1?'':'s'} derived from email addresses`);
+  if(failures.length){
+    // Said out loud on purpose: the symptom of this failing is invisible to the person who
+    // caused it — their own session reads the emails directly and looks perfectly fine, while
+    // every plain viewer keeps seeing "(name pending)".
+    console.warn(`[names] ${failures.length} could not be stored:`, failures);
+    showToast(`Couldn't save ${failures.length} auto-filled name${failures.length===1?'':'s'} — viewers may still see "(name pending)" for them`, null);
+  }
+}
+// What a plain viewer uses instead. Email addresses live in member_contacts, which only
+// Managers and the owner may read — so a viewer has no way to derive anybody's name, and if
+// the backfill above never managed to store one, they were left staring at "(name pending)"
+// with no recourse. email_index is readable by anyone signed in (it exists so login can look
+// up its own invite), and its document id IS the address, so a viewer can resolve exactly the
+// same names from it without being granted anything new and without depending on a write
+// having succeeded somewhere else, earlier, in somebody else's session.
+async function loadEmailIndexForNames(){
+  try{
+    const { db, collection, getDocs } = window.rotaDb;
+    const snap = await getDocs(collection(db, 'email_index'));
+    let found = 0;
+    snap.forEach(d=>{
+      const memberId = d.data().memberId;
+      if(!memberId) return;
+      if(memberContacts[memberId] && memberContacts[memberId].email) return; // a real contact record wins
+      // emailIndexKey() escapes the one character a document id can't contain.
+      memberContacts[memberId] = { email: d.id.replace(/_SLASH_/g, '/'), authUid: null, fromEmailIndex: true };
+      found++;
+    });
+    if(found) console.log(`[names] resolved ${found} name${found===1?'':'s'} from the email index`);
+  }catch(e){ console.warn('Could not read the email index for names (names may read as pending)', e); }
 }
 // The display name someone gets before a manager types a real one: their email address with
 // the domain dropped and the separators turned back into spaces, so
@@ -8199,8 +8241,10 @@ function memberName(id){
 // says anything about whether that person has actually logged in.
 function isUnconfirmedMember(id){
   const contact = memberContacts[id];
-  if(contact) return !contact.authUid;
-  return false;
+  // A contact resolved from the email index carries no authUid — it says nothing about
+  // whether that person has signed in, so it must not be read as "hasn't".
+  if(!contact || contact.fromEmailIndex) return false;
+  return !contact.authUid;
 }
 // One <option> per person, with pending people clearly marked but still fully selectable.
 function holidayWhoOptionsHtml(members){
@@ -9819,10 +9863,13 @@ async function bindIdentityToMember(info){
   // definitively know who they are and where they're landing.
   await ensureTeamDataLoaded(teamsNeededForViewer(m));
   const mode = (m.isAdmin || m.role==='manager') ? 'admin' : 'viewer';
+  // Before the first paint, not after: a viewer can't read member_contacts, so this is where
+  // the names on their schedule come from when nobody has stored one yet.
+  if(mode==='viewer') await loadEmailIndexForNames();
   setMode(mode);
   if(mode==='admin'){
     await loadMemberContactsForAdmin();
-    await renderScheduleTab(); // re-render once contacts are in, so email-prefix names for
+    await renderScheduleTab(); // re-render once contacts are in, so email-derived names for
     // not-yet-confirmed people show correctly on the very first paint too
   }
 }
