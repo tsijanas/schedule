@@ -727,6 +727,8 @@
   .cov-table tr.cov-total-row td{ border-top:2px solid var(--line); border-bottom:none; font-weight:700; background:var(--paper); }
   .cov-legend{ display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:12px; font-size:11.5px; color:var(--ink-soft); }
   .cov-legend span.sw{ display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  .req-avail{ font-size:10.5px; font-weight:500; color:var(--ink-soft); background:rgba(0,70,84,0.06); border-radius:6px; padding:1px 6px; white-space:nowrap; }
+  .req-avail-short{ background:var(--brick-soft); color:var(--brick-text); font-weight:700; }
   .week-nav{ display:flex; align-items:center; gap:10px; }
   .week-nav button{ background:var(--paper); border:1px solid var(--line); border-radius:8px; width:30px; height:30px; font-size:15px; }
   .week-nav .wk-label{ font-family:'Fraunces',serif; font-weight:600; font-size:16px; min-width:210px; text-align:center; }
@@ -987,8 +989,20 @@
         <h1>Requirement</h1>
         <p>How many people each task needs, per weekday. This is what the scheduler tries to fill.</p>
       </div>
+      <div class="card">
+        <div class="row">
+          <div class="week-nav">
+            <button id="req-wk-prev">‹</button>
+            <div class="wk-label" id="req-wk-label"></div>
+            <button id="req-wk-next">›</button>
+          </div>
+          <button class="btn secondary small" id="btn-req-this-week" title="Back to the week in progress">This week</button>
+          <div class="spacer"></div>
+          <button class="btn small" id="btn-save-req">Save changes</button>
+        </div>
+        <div class="muted" id="req-effect-note" style="font-size:11.5px; margin-top:8px;"></div>
+      </div>
       <div class="card" style="overflow-x:auto;">
-        <div class="row" style="margin-bottom:10px;"><div class="spacer"></div><button class="btn small" id="btn-save-req">Save changes</button></div>
         <div id="req-table-wrap"></div>
       </div>
     </div>
@@ -1101,6 +1115,18 @@
       <div class="page-head">
         <h1>Grand Requirement</h1>
         <p id="grand-req-dept-name">Combined view across every team in this department.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="week-nav">
+            <button id="greq-wk-prev">‹</button>
+            <div class="wk-label" id="greq-wk-label"></div>
+            <button id="greq-wk-next">›</button>
+          </div>
+          <button class="btn secondary small" id="btn-greq-this-week" title="Back to the week in progress">This week</button>
+          <div class="spacer"></div>
+        </div>
+        <div class="muted" id="greq-effect-note" style="font-size:11.5px; margin-top:8px;"></div>
       </div>
       <div class="card" style="overflow-x:auto;">
         <div class="hint">Set one department-wide total per task, per day — it splits across your teams automatically, proportional to each team's headcount, and saves down to them as you type. Matches tasks by name across teams, since each team's tasks aren't formally linked yet. A team that has ticked <strong>Override</strong> for a task on its own Requirement tab keeps its own numbers for it and is left out of the split.</div>
@@ -2151,6 +2177,109 @@ Object.defineProperty(state, 'reqLevels', {
   get(){ return state.reqLevelsByTeam[currentTeamId] || (state.reqLevelsByTeam[currentTeamId] = {}); },
   set(v){ state.reqLevelsByTeam[currentTeamId] = v; }
 });
+// ---------- Requirement history ----------
+// A requirement used to be one set of numbers for all time, so raising it made every week
+// that had already been staffed look short, and regenerating an old week topped it up to a
+// number that didn't exist when it ran. It is now a short list of dated versions per team:
+//
+//   [ { from:'1970-01-01', req:{taskId:{mon..sun}}, levels:{taskId:{day:{level:n}}} },
+//     { from:'2026-09-21', req:{...}, levels:{...} } ]
+//
+// The version in force for a week is the last one starting on or before that week's Monday.
+// Editing while viewing a week writes that week's version and drops everything after it, so
+// one adjustment becomes the requirement for that week and every week after — nobody has to
+// author a requirement week by week.
+//
+// state.req / state.reqByTeam keep meaning "the numbers in force now", which is what the
+// structural writes (a task being deleted, a team being duplicated) act on and what every
+// site that doesn't care about history still reads. Anything that does care asks reqForWeek.
+state.reqVersionsByTeam = {};   // teamId -> [version], sorted by from
+state.grandReqVersions = {};    // deptId -> [version]
+const REQ_EPOCH = '1970-01-01'; // the "always been this way" start date for migrated data
+function emptyReqRow(){ return {mon:0,tue:0,wed:0,thu:0,fri:0,sat:0,sun:0}; }
+function sortReqVersions(list){ return (list||[]).slice().sort((a,b)=> (a.from||'').localeCompare(b.from||'')); }
+// Accepts either shape: the versioned document, or the plain single requirement every install
+// has today (plus its separate levels document), which becomes one version effective forever.
+function reqVersionsFrom(stored, legacyReq, legacyLevels){
+  if(stored && Array.isArray(stored.versions) && stored.versions.length) return sortReqVersions(stored.versions);
+  // Deep-copied, NOT the same objects as state.reqByTeam. Sharing them made history a live
+  // alias of the current numbers: the grand push writes the split into the mirror in place,
+  // and that silently rewrote what every earlier week had asked for.
+  return [{ from: REQ_EPOCH,
+            req: JSON.parse(JSON.stringify(legacyReq || {})),
+            levels: JSON.parse(JSON.stringify(legacyLevels || {})) }];
+}
+function versionInForce(versions, weekISO){
+  const list = sortReqVersions(versions);
+  let found = list[0] || { from: REQ_EPOCH, req:{}, levels:{} };
+  for(const v of list){ if((v.from||REQ_EPOCH) <= weekISO) found = v; else break; }
+  return found;
+}
+function latestVersion(versions){
+  const list = sortReqVersions(versions);
+  return list[list.length-1] || { from: REQ_EPOCH, req:{}, levels:{} };
+}
+// The requirement and level breakdown in force for one team in one week.
+function reqForWeek(teamId, weekISO){
+  const versions = state.reqVersionsByTeam[teamId];
+  if(!versions || !versions.length){
+    // Nothing loaded (or an older install mid-migration) — the current numbers are the best
+    // and only answer, which is exactly the behaviour before requirements had history.
+    return { req: state.reqByTeam[teamId] || {}, levels: state.reqLevelsByTeam[teamId] || {} };
+  }
+  const v = versionInForce(versions, weekISO);
+  return { req: v.req || {}, levels: v.levels || {} };
+}
+function reqRowForWeek(teamId, weekISO, taskId){ return reqForWeek(teamId, weekISO).req[taskId] || emptyReqRow(); }
+function reqNeedFor(teamId, weekISO, taskId, dayKey){ return reqRowForWeek(teamId, weekISO, taskId)[dayKey] || 0; }
+function reqLevelsForWeek(teamId, weekISO, taskId){ return (reqForWeek(teamId, weekISO).levels || {})[taskId]; }
+// Writes the version in force for `weekISO` and drops every later one: "adjust once, applies
+// from here on". Past weeks are read-only in the UI, so this only ever runs for this week or
+// a future one — which is what makes dropping the later versions safe rather than destructive.
+function setReqVersion(teamId, weekISO, req, levels){
+  const kept = sortReqVersions(state.reqVersionsByTeam[teamId]).filter(v=> (v.from||REQ_EPOCH) < weekISO);
+  kept.push({ from: weekISO, req: JSON.parse(JSON.stringify(req||{})), levels: JSON.parse(JSON.stringify(levels||{})) });
+  state.reqVersionsByTeam[teamId] = kept;
+  // The mirrors: what "now" looks like, for every reader that doesn't ask about a week.
+  const now = latestVersion(kept);
+  state.reqByTeam[teamId] = JSON.parse(JSON.stringify(now.req||{}));
+  state.reqLevelsByTeam[teamId] = JSON.parse(JSON.stringify(now.levels||{}));
+  return kept;
+}
+// Keeps the latest version in step with an edit made straight to state.reqByTeam — a task
+// being deleted, a team being duplicated, an undo restoring a snapshot. Those are structural
+// changes rather than "the numbers changed this week", so they belong to the current version
+// and must not create a new dated one.
+function syncLatestReqVersion(teamId){
+  const versions = sortReqVersions(state.reqVersionsByTeam[teamId]);
+  if(!versions.length){
+    state.reqVersionsByTeam[teamId] = [{ from: REQ_EPOCH,
+      req: JSON.parse(JSON.stringify(state.reqByTeam[teamId]||{})),
+      levels: JSON.parse(JSON.stringify(state.reqLevelsByTeam[teamId]||{})) }];
+    return state.reqVersionsByTeam[teamId];
+  }
+  const last = versions[versions.length-1];
+  last.req = JSON.parse(JSON.stringify(state.reqByTeam[teamId]||{}));
+  last.levels = JSON.parse(JSON.stringify(state.reqLevelsByTeam[teamId]||{}));
+  state.reqVersionsByTeam[teamId] = versions;
+  return versions;
+}
+// One place that persists a team's requirement. The versioned document is the source of
+// truth; the two original keys keep being written as a mirror of the current version, so a
+// browser tab still running the previous build — or a rollback — reads sane numbers.
+async function saveTeamReq(teamId, opts){
+  const silent = !(opts && opts.loud);
+  const versions = sortReqVersions(state.reqVersionsByTeam[teamId]);
+  const now = latestVersion(versions);
+  const a = await safeSet('req_versions_'+teamId, { v:2, versions }, silent);
+  const b = await safeSet('weekly_req_'+teamId, now.req || {}, silent);
+  const c = await safeSet('weekly_req_levels_'+teamId, now.levels || {}, silent);
+  return a && b && c;
+}
+// The dates a team's requirement changed, for the "changed on" line under the editor.
+function reqChangeDates(teamId){
+  return sortReqVersions(state.reqVersionsByTeam[teamId]).map(v=>v.from).filter(d=>d && d!==REQ_EPOCH);
+}
 Object.defineProperty(state, 'schedules', {
   get(){ return state.schedulesByTeam[currentTeamId] || (state.schedulesByTeam[currentTeamId] = {}); },
   set(v){ state.schedulesByTeam[currentTeamId] = v; }
@@ -2187,10 +2316,11 @@ async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
   await Promise.all(teamIds.map(async teamId=>{
     // Fetched together, not one after another — they're independent documents, and chaining
     // them made every team three network round trips deep instead of one.
-    const [ttRes, rrRes, rlRes] = await Promise.allSettled([
+    const [ttRes, rrRes, rlRes, rvRes] = await Promise.allSettled([
       window.storage.get('tasks_'+teamId, true),
       window.storage.get('weekly_req_'+teamId, true),
       window.storage.get('weekly_req_levels_'+teamId, true),
+      window.storage.get('req_versions_'+teamId, true),
     ]);
     try{
       if(ttRes.status==='rejected') throw ttRes.reason;
@@ -2225,6 +2355,26 @@ async function loadTeamTaskData(teamIds, legacyTasks, legacyReq){
       console.error('Could not load requirement levels for team', teamId, e);
       // Not fatal enough to bank its own banner message — reqLevels is a finer-grained
       // breakdown on top of reqByTeam, safe to leave unset without risking data loss.
+    }
+    // The dated history. Absent on every install until the requirement is next saved, in
+    // which case the numbers just loaded become one version that has always been in force —
+    // so nothing changes until somebody actually adjusts something.
+    try{
+      if(rvRes.status==='rejected') throw rvRes.reason;
+      const rv = rvRes.value;
+      state.reqVersionsByTeam[teamId] = reqVersionsFrom(
+        rv ? JSON.parse(rv.value) : null,
+        state.reqByTeam[teamId],
+        state.reqLevelsByTeam[teamId]);
+      // A version list that exists wins over the mirrors, which may be a older build's copy.
+      const now = latestVersion(state.reqVersionsByTeam[teamId]);
+      if(rv){
+        state.reqByTeam[teamId] = JSON.parse(JSON.stringify(now.req||{}));
+        state.reqLevelsByTeam[teamId] = JSON.parse(JSON.stringify(now.levels||{}));
+      }
+    }catch(e){
+      console.error('Could not load requirement history for team', teamId, e);
+      state.reqVersionsByTeam[teamId] = reqVersionsFrom(null, state.reqByTeam[teamId], state.reqLevelsByTeam[teamId]);
     }
     // Same one-time cleanup as members, but for tasks — a task restricted to (or made visible
     // to) "Manager" as a level would now be impossible to satisfy, since nobody can hold that
@@ -2434,7 +2584,7 @@ async function loadState(){
   if(firstRun){
     for(const team of state.teams){
       await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
-      await safeSet('weekly_req_'+team.id, state.reqByTeam[team.id], true);
+      syncLatestReqVersion(team.id); await saveTeamReq(team.id);
     }
   }
 
@@ -2902,7 +3052,7 @@ function renderDeptTeamsCard(){
       const ok = await safeSet('teams', state.teams);
       if(ok){
         await safeSet('tasks_'+newId, state.tasksByTeam[newId], true);
-        await safeSet('weekly_req_'+newId, state.reqByTeam[newId], true);
+        syncLatestReqVersion(newId); await saveTeamReq(newId);
         logAudit('team.duplicate', { from: source.name, to: `${source.name} (copy)` });
         showToast(`Duplicated ${source.name} — same tasks and weekly needs, no people yet`);
       }
@@ -5293,7 +5443,7 @@ async function removeTeamEntirely(teamId){
       state.reqByTeam[teamId] = reqSnapshot;
       await safeSet('teams', state.teams, true);
       await safeSet('tasks_'+teamId, tasksSnapshot, true);
-      await safeSet('weekly_req_'+teamId, reqSnapshot, true);
+      state.reqByTeam[teamId] = reqSnapshot; syncLatestReqVersion(teamId); await saveTeamReq(teamId);
       renderTeamSwitcher(); renderDeptTeamsCard(); renderDeptSetupCard();
       showToast('Restored');
     });
@@ -5959,13 +6109,66 @@ function availabilityRowHtml(avail, label, weekMonday){
   });
   return html + `</tr>`;
 }
+let reqWeekMonday = null; // the week the Requirement tab is editing
+function reqWeekIsPast(){ return iso(reqWeekMonday) < iso(mondayOf(new Date())); }
+// Says plainly what saving will do, and when this team's numbers last changed.
+function renderReqEffectNote(){
+  const el = document.getElementById('req-effect-note');
+  if(!el) return;
+  const weekISO = iso(reqWeekMonday);
+  const inForce = versionInForce(state.reqVersionsByTeam[currentTeamId], weekISO);
+  const since = (inForce.from && inForce.from !== REQ_EPOCH) ? fmtShortDate(inForce.from) : null;
+  const changes = reqChangeDates(currentTeamId);
+  const changeLine = changes.length
+    ? ` <span class="muted">Changed on: ${changes.map(fmtShortDate).join(' · ')}.</span>`
+    : '';
+  const saveBtn = document.getElementById('btn-save-req');
+  if(reqWeekIsPast()){
+    el.innerHTML = `This week has already been and gone, so its numbers are kept as they were${since?` (set ${escHtml(since)})`:''} — open this week or a later one to change the requirement.${changeLine}`;
+    if(saveBtn){ saveBtn.disabled = true; saveBtn.title = 'Past weeks keep the numbers they ran with'; }
+  } else {
+    el.innerHTML = `These numbers apply <strong>from ${escHtml(fmtShortDate(weekISO))} onwards</strong>${since?`, and have been in force since ${escHtml(since)}`:''}. Saving changes this week and every week after it; earlier weeks keep what they ran with.${changeLine}`;
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.title = ''; }
+  }
+}
+function fmtShortDate(dISO){
+  const d = new Date(dISO+'T00:00:00');
+  return isNaN(d) ? dISO : d.toLocaleDateString('en-US', { month:'short', day:'numeric', year: d.getFullYear()!==new Date().getFullYear() ? 'numeric' : undefined });
+}
+// Replaces the old "shared with N other teams" note under a task name. How many people could
+// actually work this task in the week being looked at: eligible for it, holding a level it
+// allows, and not away for the whole week. Turns brick when the busiest day asks for more
+// than the thinnest day can supply, which is the one number that says "this can't be staffed".
+function taskAvailabilityHtml(task, row, weekMonday, pool){
+  const members = (pool || teamMembers()).filter(m=>
+    m.eligibility && m.eligibility[task.id] && levelAllowed(task, m.levels)
+    && (m.levels||[]).some(l=>LEVELS.includes(l)));
+  const dates = DAYS.map((d,i)=> iso(addDays(weekMonday,i)));
+  const perDay = DAYS.map((d,i)=> members.filter(m=> !isOnHoliday(m.id, dates[i])).length);
+  const anyWeek = members.filter(m=> dates.some((dISO,i)=> !isOnHoliday(m.id, dISO))).length;
+  const neededDays = DAYS.map((d,i)=> ({ i, need: (row||{})[d]||0 })).filter(x=>x.need>0);
+  const worst = neededDays.length ? Math.min(...neededDays.map(x=> perDay[x.i])) : Math.min(...perDay);
+  const biggestAsk = neededDays.length ? Math.max(...neededDays.map(x=>x.need)) : 0;
+  const cannotCover = biggestAsk > worst;
+  const detail = DAYS.map((d,i)=> `${DAY_LABELS[d].slice(0,3)} ${perDay[i]}`).join(' · ');
+  const title = cannotCover
+    ? `Asks for ${biggestAsk} on its busiest day, but only ${worst} can work the thinnest day of the week. Availability by day: ${detail}`
+    : `People who can work this task this week, by day: ${detail}`;
+  return `<span class="req-avail ${cannotCover?'req-avail-short':''}" title="${escAttr(title)}">${cannotCover?'⚠ ':''}${anyWeek} can work this</span>`;
+}
 function renderReqTab(){
   const wrap = document.getElementById('req-table-wrap');
-  const avail = availabilityByDay(teamMembers(), currentWeekMonday);
+  if(!reqWeekMonday) reqWeekMonday = new Date(currentWeekMonday);
+  const weekISO = iso(reqWeekMonday);
+  const past = reqWeekIsPast();
+  document.getElementById('req-wk-label').textContent = fmtWeek(reqWeekMonday);
+  renderReqEffectNote();
+  const avail = availabilityByDay(teamMembers(), reqWeekMonday);
   const capacityScale = avail.scheduleableCount;
   const sortedTasks = sortedTasksForDisplay(state.tasks);
   const gLock = grandReqLockInfo();
   const anyLocked = sortedTasks.some(t=> gLock.lockedFor(t));
+  const effective = reqForWeek(currentTeamId, weekISO);
   let html = '';
   if(anyLocked){
     html += `<div class="muted" style="font-size:11.5px; background:var(--gold-soft); border-radius:8px; padding:8px 11px; margin-bottom:12px;">🔒 Rows marked with a lock follow the Grand Requirement for ${escHtml(gLock.deptName)} — the department-wide numbers are split across its teams automatically. Tick <strong>Override</strong> on a row to set this team's own numbers for it instead.</div>`;
@@ -5974,16 +6177,17 @@ function renderReqTab(){
   DAYS.forEach(d=> html+=`<th>${DAY_LABELS[d]}</th>`);
   html += '</tr></thead><tbody>';
   sortedTasks.forEach(t=>{
-    const row = state.req[t.id] || {mon:0,tue:0,wed:0,thu:0,fri:0,sat:0,sun:0};
-    const breakdown = state.reqLevels[t.id];
+    const row = effective.req[t.id] || emptyReqRow();
+    const breakdown = (effective.levels||{})[t.id];
     const hasBreakdown = breakdown && Object.values(breakdown).some(dayLv=> dayLv && Object.values(dayLv).some(v=>v>0));
     const inGrand = gLock.inGrand(t);
     const grandLocked = gLock.lockedFor(t);
-    const frozen = hasBreakdown || grandLocked;
+    const frozen = hasBreakdown || grandLocked || past;
     html += `<tr data-task="${t.id}" class="${grandLocked?'req-row-locked':''}"><td style="font-weight:600; text-align:left;">
       <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
         ${grandLocked?'<span title="Set from the Grand Requirement">🔒</span>':''}
         <span>${escHtml(t.name)}</span>
+        ${taskAvailabilityHtml(t, row, reqWeekMonday)}
         <button type="button" class="req-breakdown-toggle" data-task="${t.id}" ${grandLocked?'disabled title="Set from the Grand Requirement — tick Override to edit"':`title="${hasBreakdown?'Edit level breakdown':'Break this down by level'}"`}>${hasBreakdown?'⚙':'+'}</button>
         ${inGrand?`<label class="req-override-label"><input type="checkbox" class="req-override-check" data-task="${t.id}" ${t.reqOverride===true?'checked':''}> Override</label>`:''}
       </div>
@@ -6001,14 +6205,14 @@ function renderReqTab(){
   });
   html += `<tr class="req-total-row"><td style="font-weight:700; text-align:left;">Total</td>`;
   DAYS.forEach(d=>{
-    const sum = sortedTasks.reduce((s,t)=> s+((state.req[t.id]||{})[d]||0), 0);
+    const sum = sortedTasks.reduce((s,t)=> s+((effective.req[t.id]||{})[d]||0), 0);
     html += `<td class="mono day-total" data-day="${d}" style="font-weight:700;">${sum}</td>`;
   });
   html += `</tr>`;
-  html += availabilityRowHtml(avail, 'Available', currentWeekMonday);
+  html += availabilityRowHtml(avail, 'Available', reqWeekMonday);
   html += `<tr class="req-diff-row"><td style="font-weight:700; text-align:left;">Spare capacity</td>`;
   DAYS.forEach(d=>{
-    const sum = sortedTasks.reduce((s,t)=> s+((state.req[t.id]||{})[d]||0), 0);
+    const sum = sortedTasks.reduce((s,t)=> s+((effective.req[t.id]||{})[d]||0), 0);
     const diff = avail.byDay[d].total - sum;
     html += `<td class="mono day-diff ${diff<0?'diff-short':'diff-ok'}" data-day="${d}" style="font-weight:700;">${diff>0?'+':''}${diff}</td>`;
   });
@@ -6254,13 +6458,24 @@ document.getElementById('btn-save-req').addEventListener('click', async ()=>{
   Object.keys(state.reqLevels).forEach(taskId=>{
     if(!(taskId in newReqLevels) && newReq[taskId]) newReqLevels[taskId] = state.reqLevels[taskId];
   });
-  state.req = newReq;
-  state.reqLevels = newReqLevels;
-  const ok = await safeSet('weekly_req_'+currentTeamId, state.req);
-  const ok2 = await safeSet('weekly_req_levels_'+currentTeamId, state.reqLevels, true);
-  if(ok && ok2) showToast('Weekly needs saved');
+  if(reqWeekIsPast()){
+    showToast('That week has already run — its numbers are kept as they were. Open this week or a later one to change the requirement.');
+    return;
+  }
+  // The edit lands as the version in force from this week on, and replaces anything dated
+  // later: one adjustment, applying forward, with earlier weeks untouched.
+  const weekISO = iso(reqWeekMonday);
+  setReqVersion(currentTeamId, weekISO, newReq, newReqLevels);
+  const ok = await saveTeamReq(currentTeamId, { loud:true });
+  if(ok) showToast(`Requirement saved — applies from ${fmtShortDate(weekISO)} onwards`);
   renderReqTab();
 });
+document.getElementById('greq-wk-prev').addEventListener('click', ()=>{ grandReqWeekMonday = addDays(grandReqWeekMonday,-7); renderGrandReqTab(); });
+document.getElementById('greq-wk-next').addEventListener('click', ()=>{ grandReqWeekMonday = addDays(grandReqWeekMonday,7); renderGrandReqTab(); });
+document.getElementById('btn-greq-this-week').addEventListener('click', ()=>{ grandReqWeekMonday = mondayOf(new Date()); renderGrandReqTab(); });
+document.getElementById('req-wk-prev').addEventListener('click', ()=>{ reqWeekMonday = addDays(reqWeekMonday,-7); renderReqTab(); });
+document.getElementById('req-wk-next').addEventListener('click', ()=>{ reqWeekMonday = addDays(reqWeekMonday,7); renderReqTab(); });
+document.getElementById('btn-req-this-week').addEventListener('click', ()=>{ reqWeekMonday = mondayOf(new Date()); renderReqTab(); });
 
 // ---- Grand requirement: one department-wide number per task, split across teams ----
 // proportional to headcount. There's no formal "department" grouping yet (deliberately, until
@@ -6303,17 +6518,42 @@ function grandTaskGroups(deptId){
   });
   return groups;
 }
-let grandReqTotals = {}; // loaded from storage for the current department — the actual fix for the reset-to-0 bug
-let grandReqLevels = {}; // loaded from storage for the current department — mirrors grandReqTotals, but per-level
-async function loadGrandReqTotals(deptId){
-  try{
-    const saved = await window.storage.get('grand_req_'+deptId, true);
-    grandReqTotals = saved ? JSON.parse(saved.value) : {};
-  }catch(e){ grandReqTotals = {}; }
-  try{
-    const savedLv = await window.storage.get('grand_req_levels_'+deptId, true);
-    grandReqLevels = savedLv ? JSON.parse(savedLv.value) : {};
-  }catch(e){ grandReqLevels = {}; }
+let grandReqTotals = {}; // the department's numbers for the week being viewed
+let grandReqLevels = {}; // same, per level
+let grandReqWeekMonday = null; // the week the Grand Requirement tab is editing
+function greqWeekIsPast(){ return iso(grandReqWeekMonday) < iso(mondayOf(new Date())); }
+// Dated the same way a team's requirement is: one list of versions per department, with the
+// two original keys kept as a mirror of the current one so an older build still reads sanely.
+async function loadGrandReqTotals(deptId, weekISO){
+  let legacy = {}, legacyLv = {}, versioned = null;
+  try{ const saved = await window.storage.get('grand_req_'+deptId, true); legacy = saved ? JSON.parse(saved.value) : {}; }catch(e){}
+  try{ const savedLv = await window.storage.get('grand_req_levels_'+deptId, true); legacyLv = savedLv ? JSON.parse(savedLv.value) : {}; }catch(e){}
+  try{ const v = await window.storage.get('grand_req_versions_'+deptId, true); versioned = v ? JSON.parse(v.value) : null; }catch(e){}
+  state.grandReqVersions[deptId] = reqVersionsFrom(versioned, legacy, legacyLv);
+  const v = versionInForce(state.grandReqVersions[deptId], weekISO || iso(mondayOf(new Date())));
+  grandReqTotals = JSON.parse(JSON.stringify(v.req || {}));
+  grandReqLevels = JSON.parse(JSON.stringify(v.levels || {}));
+}
+async function saveGrandReqVersion(deptId, weekISO, totals, levels){
+  const kept = sortReqVersions(state.grandReqVersions[deptId]).filter(v=> (v.from||REQ_EPOCH) < weekISO);
+  kept.push({ from: weekISO, req: JSON.parse(JSON.stringify(totals||{})), levels: JSON.parse(JSON.stringify(levels||{})) });
+  state.grandReqVersions[deptId] = kept;
+  const now = latestVersion(kept);
+  await safeSet('grand_req_versions_'+deptId, { v:2, versions: kept }, true);
+  await safeSet('grand_req_'+deptId, now.req || {}, true);
+  await safeSet('grand_req_levels_'+deptId, now.levels || {}, true);
+}
+function renderGreqEffectNote(){
+  const el = document.getElementById('greq-effect-note');
+  if(!el) return;
+  const weekISO = iso(grandReqWeekMonday);
+  const changes = (sortReqVersions(state.grandReqVersions[currentDepartmentId])||[]).map(v=>v.from).filter(d=>d && d!==REQ_EPOCH);
+  const changeLine = changes.length ? ` <span class="muted">Changed on: ${changes.map(fmtShortDate).join(' · ')}.</span>` : '';
+  if(greqWeekIsPast()){
+    el.innerHTML = `This week has already run, so its numbers — and the split that went to each team — are kept as they were. Open this week or a later one to change the requirement.${changeLine}`;
+  } else {
+    el.innerHTML = `These numbers apply <strong>from ${escHtml(fmtShortDate(weekISO))} onwards</strong> for every team that follows the department. Editing them changes this week and every week after it.${changeLine}`;
+  }
 }
 async function renderGrandReqTab(){
   const wrap = document.getElementById('grand-req-wrap');
@@ -6324,7 +6564,10 @@ async function renderGrandReqTab(){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No shared task names yet in this department's teams.</div>`;
     return;
   }
-  await loadGrandReqTotals(currentDepartmentId);
+  if(!grandReqWeekMonday) grandReqWeekMonday = new Date(grandWeekMonday || currentWeekMonday);
+  document.getElementById('greq-wk-label').textContent = fmtWeek(grandReqWeekMonday);
+  await loadGrandReqTotals(currentDepartmentId, iso(grandReqWeekMonday));
+  renderGreqEffectNote();
 
   const teamSizes = {};
   teamsInDepartment(currentDepartmentId).forEach(t=> teamSizes[t.id] = state.members.filter(m=>m.teamId===t.id).length);
@@ -6454,6 +6697,10 @@ async function renderGrandReqTab(){
 async function applyGrandRequirementToTeams({ silent = false } = {}){
   const wrap = document.getElementById('grand-req-wrap');
   if(!wrap || !currentDepartmentId) return 0;
+  if(grandReqWeekMonday && greqWeekIsPast()){
+    if(!silent) showToast('That week has already run — its numbers are kept as they were. Open this week or a later one.');
+    return 0;
+  }
   const rows = Array.from(wrap.querySelectorAll('tr[data-gkey]'));
   if(rows.length===0) return 0;
   const groups = grandTaskGroups(currentDepartmentId);
@@ -6522,13 +6769,15 @@ async function applyGrandRequirementToTeams({ silent = false } = {}){
       });
     }
   });
+  // The split lands as each team's version in force from this week on, exactly as if their
+  // own Requirement tab had been edited for that week — earlier weeks keep what they ran with.
+  const weekISO = iso(grandReqWeekMonday || mondayOf(new Date()));
   for(const teamId of touchedTeamIds){
-    await safeSet('weekly_req_'+teamId, state.reqByTeam[teamId], true);
-    await safeSet('weekly_req_levels_'+teamId, state.reqLevelsByTeam[teamId] || {}, true);
+    setReqVersion(teamId, weekISO, state.reqByTeam[teamId], state.reqLevelsByTeam[teamId]);
+    await saveTeamReq(teamId);
   }
   grandReqTotals = newTotals;
-  await safeSet('grand_req_'+currentDepartmentId, grandReqTotals, true); // what makes the grand numbers stick instead of resetting to 0
-  await safeSet('grand_req_levels_'+currentDepartmentId, grandReqLevels, true);
+  await saveGrandReqVersion(currentDepartmentId, weekISO, grandReqTotals, grandReqLevels);
   if(touchedTeamIds.has(currentTeamId)){
     state.req = state.reqByTeam[currentTeamId];
     state.reqLevels = state.reqLevelsByTeam[currentTeamId] || {};
@@ -6576,7 +6825,13 @@ function renderTeamReqTableOnly(){
 document.getElementById('btn-apply-grand-req').addEventListener('click', async ()=>{
   const wrap = document.getElementById('grand-req-wrap');
   if(!wrap || wrap.querySelectorAll('tr[data-gkey]').length===0 || !currentDepartmentId) return;
-  askConfirm(`Re-apply the grand requirement to every team's own Weekly Needs? This overwrites each matching task's numbers on every team that follows grand — teams with "Override" ticked for a task keep their own numbers for it. Tasks with a level breakdown set here push their own per-level minimums instead of a plain total, split by how many of each level each team actually has.`, 'Apply', async ()=>{
+  // Said before the confirmation rather than after it — being asked to confirm something that
+  // is then refused is worse than not being asked.
+  if(grandReqWeekMonday && greqWeekIsPast()){
+    showToast('That week has already run — its numbers, and the split each team got, are kept as they were. Open this week or a later one.');
+    return;
+  }
+  askConfirm(`Re-apply the grand requirement to every team's own Weekly Needs, from ${fmtShortDate(iso(grandReqWeekMonday || mondayOf(new Date())))} onwards? This overwrites each matching task's numbers on every team that follows grand — teams with "Override" ticked for a task keep their own numbers for it. Tasks with a level breakdown set here push their own per-level minimums instead of a plain total, split by how many of each level each team actually has.`, 'Apply', async ()=>{
     await applyGrandRequirementToTeams({ silent:false });
     renderReqTab();
   });
@@ -6746,8 +7001,7 @@ async function renderGrandTasksTab(){
           if(state.reqByTeam[team.id]) delete state.reqByTeam[team.id][task.id];
           if(state.reqLevelsByTeam[team.id]) delete state.reqLevelsByTeam[team.id][task.id];
           await safeSet('tasks_'+team.id, state.tasksByTeam[team.id], true);
-          await safeSet('weekly_req_'+team.id, state.reqByTeam[team.id]||{}, true);
-          await safeSet('weekly_req_levels_'+team.id, state.reqLevelsByTeam[team.id]||{}, true);
+          syncLatestReqVersion(team.id); await saveTeamReq(team.id);
         }
         logAudit('task.grand_remove', { name: g.displayName, teams: g.perTeam.length });
         pushUndo(async ()=>{
@@ -6756,8 +7010,8 @@ async function renderGrandTasksTab(){
             state.reqByTeam[s.teamId] = s.req;
             state.reqLevelsByTeam[s.teamId] = s.reqLevels;
             await safeSet('tasks_'+s.teamId, s.tasks, true);
-            await safeSet('weekly_req_'+s.teamId, s.req, true);
-            await safeSet('weekly_req_levels_'+s.teamId, s.reqLevels, true);
+            state.reqByTeam[s.teamId] = s.req; state.reqLevelsByTeam[s.teamId] = s.reqLevels;
+            syncLatestReqVersion(s.teamId); await saveTeamReq(s.teamId);
           }
           if(state.teams.some(t=>t.id===currentTeamId)){ renderTasksTab(); renderReqTab(); }
           renderGrandTasksTab();
@@ -6892,7 +7146,7 @@ document.getElementById('btn-grand-generate').addEventListener('click', ()=>{
       // actually a department-wide requirement number set for it — otherwise there's nothing
       // to rotate against, and it falls back to each team's own, independently-set number,
       // same as before.
-      await loadGrandReqTotals(currentDepartmentId);
+      await loadGrandReqTotals(currentDepartmentId, iso(grandWeekMonday));
       const allGroups = grandTaskGroups(currentDepartmentId);
       const sharedGroups = Object.entries(allGroups).filter(([key, g])=>
         g.perTeam.length > 1 && grandReqTotals[key] && Object.values(grandReqTotals[key]).some(v=>v>0)
@@ -7601,10 +7855,10 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
     let bars = '';
     let levelShortfalls = [];
     g.perTeam.forEach(({team, task})=>{
-      const need = isBankHoliday(primaryDate) ? 0 : ((state.reqByTeam[team.id]?.[task.id]||{})[primaryDayKey] || 0);
+      const need = isBankHoliday(primaryDate) ? 0 : reqNeedFor(team.id, dates[0], task.id, primaryDayKey);
       totalNeed += need;
       const assigned = ((rowTeamData[team.id].sched[primaryDate]||{})[task.id]) || [];
-      const breakdown = state.reqLevelsByTeam[team.id]?.[task.id]?.[primaryDayKey];
+      const breakdown = (reqLevelsForWeek(team.id, dates[0], task.id)||{})[primaryDayKey];
       if(breakdown && !isBankHoliday(primaryDate)){
         LEVELS.forEach(level=>{
           const levelNeed = breakdown[level] || 0;
@@ -8188,6 +8442,11 @@ async function generateWeek(weekMon, opts){
   const balance = await computeBalance();
   // deep-ish clone so we don't mutate the cache while simulating
   const bal = JSON.parse(JSON.stringify(balance));
+  // The requirement as it stood for THIS week, not as it stands today — regenerating an old
+  // week must not top it up to a number that was only set afterwards.
+  const weekReq = reqForWeek(currentTeamId, iso(weekMon));
+  const reqOf = (taskId)=> weekReq.req[taskId] || emptyReqRow();
+  const reqLevelsOf = (taskId)=> (weekReq.levels||{})[taskId];
   const dates = []; for(let i=0;i<DAYS.length;i++) dates.push(iso(addDays(weekMon,i)));
   const schedule = {}; dates.forEach(d=> schedule[d] = {});
   const dayKeyOf = (dISO)=> DAYS[dates.indexOf(dISO)];
@@ -8252,9 +8511,9 @@ async function generateWeek(weekMon, opts){
   // available, so candidates are judged day by day. Whoever can cover the whole run is ranked
   // first, so the row still comes out as one merged bar wherever that's genuinely possible.
   weeklyTasks.forEach(task=>{
-    const neededDays = dates.filter(d=> (state.req[task.id]||{})[dayKeyOf(d)] > 0 && !isBankHoliday(d));
+    const neededDays = dates.filter(d=> reqOf(task.id)[dayKeyOf(d)] > 0 && !isBankHoliday(d));
     if(neededDays.length===0){ dates.forEach(d=> schedule[d][task.id]=[]); return; }
-    const need = Math.max(...neededDays.map(d=> (state.req[task.id]||{})[dayKeyOf(d)]));
+    const need = Math.max(...neededDays.map(d=> reqOf(task.id)[dayKeyOf(d)]));
 
     // Level breakdown for a same-all-week task: the minimum per level has to be one
     // consistent number across the week (since it's the same people every day), so this
@@ -8263,7 +8522,7 @@ async function generateWeek(weekMon, opts){
     const levelBreakdownMax = {};
     let hasLevelBreakdown = false;
     LEVELS.forEach(level=>{
-      const maxForLevel = Math.max(0, ...neededDays.map(d=> ((state.reqLevels[task.id]&&state.reqLevels[task.id][dayKeyOf(d)])||{})[level] || 0));
+      const maxForLevel = Math.max(0, ...neededDays.map(d=> ((reqLevelsOf(task.id)||{})[dayKeyOf(d)]||{})[level] || 0));
       levelBreakdownMax[level] = maxForLevel;
       if(maxForLevel>0) hasLevelBreakdown = true;
     });
@@ -8327,7 +8586,7 @@ async function generateWeek(weekMon, opts){
     // task would — the week stops being one bar, but it is actually covered.
     neededDays.forEach(d=>{
       const dayKey = dayKeyOf(d);
-      const dayLevels = (state.reqLevels[task.id] && state.reqLevels[task.id][dayKey]) || {};
+      const dayLevels = (reqLevelsOf(task.id) || {})[dayKey] || {};
       const topUpDay = (count, extraFilter)=>{
         for(let i=0;i<count;i++){
           let pool = teamMembers().filter(m=>
@@ -8351,7 +8610,7 @@ async function generateWeek(weekMon, opts){
         }).length;
         topUpDay(levelNeed - levelHave, m=> (m.levels||[]).includes(level));
       });
-      topUpDay(((state.req[task.id]||{})[dayKey] || 0) - onDay[d].length, null);
+      topUpDay((reqOf(task.id)[dayKey] || 0) - onDay[d].length, null);
     });
 
     dates.forEach(d=> schedule[d][task.id] = neededDays.includes(d) ? onDay[d].slice() : (schedule[d][task.id]||[]));
@@ -8363,7 +8622,7 @@ async function generateWeek(weekMon, opts){
     normalTasks.forEach(task=>{
       if(isBankHoliday(dISO)){ schedule[dISO][task.id] = schedule[dISO][task.id] || []; return; }
       const keptIds = seedKept(dISO, task);
-      const levelBreakdown = state.reqLevels[task.id] && state.reqLevels[task.id][dayKey];
+      const levelBreakdown = (reqLevelsOf(task.id) || {})[dayKey];
       const hasLevelBreakdown = levelBreakdown && Object.values(levelBreakdown).some(v=>v>0);
 
       const sortAndShuffle = (pool)=>{
@@ -8402,7 +8661,7 @@ async function generateWeek(weekMon, opts){
         return;
       }
 
-      const need = Math.max(0, ((state.req[task.id]||{})[dayKey] || 0) - keptIds.length);
+      const need = Math.max(0, (reqOf(task.id)[dayKey] || 0) - keptIds.length);
       if(need<=0){ schedule[dISO][task.id] = keptIds.length ? keptIds.slice() : (schedule[dISO][task.id] || []); return; }
       let candidates = teamMembers().filter(m=>
         !isOnHoliday(m.id, dISO) && m.eligibility[task.id] && levelAllowed(task,m.levels) && canAssign(m, task, dISO) && !keptIds.includes(m.id)
@@ -8481,10 +8740,11 @@ function coverageShowReq(scope){
 // holidays are treated exactly as the Schedule grid treats them — requirement zero for that
 // day — so a day nobody works is never reported as a shortfall.
 function coverageRowsForTeam(sched, dates){
+  const weekReq = reqForWeek(currentTeamId, dates[0]);
   return sortedTasksForDisplay(state.tasks).map(task=>{
     const days = dates.map((dISO, i)=>{
       const bh = isBankHoliday(dISO);
-      return { need: bh ? 0 : ((state.req[task.id]||{})[DAYS[i]] || 0),
+      return { need: bh ? 0 : ((weekReq.req[task.id]||{})[DAYS[i]] || 0),
                assigned: ((sched[dISO]||{})[task.id] || []).length, bh };
     });
     return { label: task.name, days };
@@ -8504,7 +8764,7 @@ async function coverageRowsForDepartment(dates, weekISO){
         const bh = isBankHoliday(dISO);
         let need = 0, assigned = 0;
         g.perTeam.forEach(({team, task})=>{
-          if(!bh) need += ((state.reqByTeam[team.id]||{})[task.id]||{})[DAYS[i]] || 0;
+          if(!bh) need += reqNeedFor(team.id, dates[0], task.id, DAYS[i]);
           assigned += (((scheds[team.id]||{})[dISO]||{})[task.id] || []).length;
         });
         return { need, assigned, bh };
@@ -8815,6 +9075,11 @@ function shortDisplayName(memberId, scopeMemberIds){
 
 function buildScheduleTableHtml(teamId){
   const dates = DAYS.map((d,i)=> iso(addDays(currentWeekMonday,i)));
+  // Whatever the requirement was for the week on screen — an old week shows the shortfall it
+  // actually had, not one invented by a change made since.
+  const weekReq = reqForWeek(teamId, dates[0]);
+  const reqOf = (taskId)=> weekReq.req[taskId] || emptyReqRow();
+  const reqLevelsOf = (taskId)=> (weekReq.levels||{})[taskId];
   const scopeIds = state.members.filter(m=>m.teamId===teamId).map(m=>m.id);
   function runsFor(taskId){
     const task = state.tasks.find(t=>t.id===taskId);
@@ -8826,7 +9091,7 @@ function buildScheduleTableHtml(teamId){
     while(i < DAYS.length){
       let j = i;
       if(allowMerge){
-        const neededHere = ((state.req[taskId]||{})[DAYS[i]] || 0) > 0;
+        const neededHere = (reqOf(taskId)[DAYS[i]] || 0) > 0;
         if(neededHere){
           // Merge only while the same people are actually on it. "Same all week" is how the
           // week is normally built, not a promise it can never be broken — when someone is
@@ -8834,7 +9099,7 @@ function buildScheduleTableHtml(teamId){
           // change is visible and each stretch stays separately editable. Without this the
           // whole row rendered from Monday's names and silently hid the cover.
           while(j+1 < DAYS.length
-                && ((state.req[taskId]||{})[DAYS[j+1]] || 0) > 0
+                && (reqOf(taskId)[DAYS[j+1]] || 0) > 0
                 && samePeople(idsOn(j+1), idsOn(i))) j++;
         }
       }
@@ -8858,14 +9123,14 @@ function buildScheduleTableHtml(teamId){
     runsFor(task.id).forEach(run=>{
       const span = run.endIdx - run.startIdx + 1;
       const primaryDate = run.dates[0];
-      const need = isBankHoliday(primaryDate) ? 0 : ((state.req[task.id]||{})[DAYS[run.startIdx]] || 0);
+      const need = isBankHoliday(primaryDate) ? 0 : (reqOf(task.id)[DAYS[run.startIdx]] || 0);
       const assigned = run.ids;
       const spanned = span > 1;
       const dayKey = DAYS[run.startIdx];
       let levelShortfalls = [];
       if(!isBankHoliday(primaryDate)){
         const runDayKeys = run.dates.map((d,i)=> DAYS[run.startIdx + i]);
-        const breakdownForDay = (dk)=> state.reqLevels[task.id] && state.reqLevels[task.id][dk];
+        const breakdownForDay = (dk)=> (reqLevelsOf(task.id) || {})[dk];
         const anyBreakdown = runDayKeys.some(dk=> breakdownForDay(dk));
         if(anyBreakdown){
           LEVELS.forEach(level=>{
@@ -9546,7 +9811,7 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
   const deptId = myTeam ? myTeam.departmentId : null;
   let sharedGroups = [];
   if(deptId){
-    await loadGrandReqTotals(deptId);
+    await loadGrandReqTotals(deptId, iso(currentWeekMonday)); // the week Generate is about to build
     const allGroups = grandTaskGroups(deptId);
     // Only teams that actually follow the department take part in its shared rotation. An
     // Independent team was still being pooled in here, which contradicted the switch: its
@@ -10140,7 +10405,8 @@ document.getElementById('btn-import').addEventListener('click', async ()=>{
   await persistHolidays();
   for(const team of state.teams){
     await safeSet('tasks_'+team.id, state.tasksByTeam[team.id] || DEFAULT_TASKS, true);
-    await safeSet('weekly_req_'+team.id, state.reqByTeam[team.id] || DEFAULT_REQ, true);
+    state.reqByTeam[team.id] = state.reqByTeam[team.id] || JSON.parse(JSON.stringify(DEFAULT_REQ));
+    syncLatestReqVersion(team.id); await saveTeamReq(team.id);
   }
   renderTeamSwitcher();
   renderOrgTab();
