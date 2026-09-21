@@ -2824,8 +2824,7 @@ function renderDeptTeamsCard(){
       const ok = await safeSet('teams', state.teams);
       if(ok){ logAudit('team.color_change', { name: team.name }); }
       renderDeptTeamsCard();
-      renderTeamSwitcher();
-      applyTeamAccent();
+      await repaintAfterColourChange();
     });
   });
   wrap.querySelectorAll('.dept-team-duplicate-btn').forEach(btn=>{
@@ -4458,7 +4457,7 @@ function renderTeamTab(){
         if(previous === undefined) delete m.colorIndex; else m.colorIndex = previous;
         if(dot) dot.style.background = barColorFor(m.id, m.teamId).bg;
       }
-      if(viewMode === 'admin'){ try{ drawScheduleGrid(); }catch(err){} } // the Schedule tab may be the one on screen
+      await repaintAfterColourChange();
     });
   });
   const nameMap = buildNameMap(), emailMap = buildEmailMap();
@@ -4918,6 +4917,53 @@ function barColorFor(memberId, teamId){
     if(own) return own;
   }
   return colorForTeam(teamId);
+}
+// Every colour in this app is worked out at render time from the team and the person — none of
+// it is stored alongside a schedule, a holiday or an assignment. So a change applies to every
+// week there has ever been, past and future, the moment that week is drawn; there is nothing
+// historical to migrate.
+//
+// What a change does have to do is redraw what is ALREADY drawn. Panels are hidden rather than
+// destroyed when you switch tabs, so a grid rendered before the change kept its old colours
+// until something happened to re-render it — which reads, fairly, as the change not applying.
+// This repaints each colour-bearing panel that has actually been rendered, and skips the ones
+// that haven't: a panel that has never been drawn will build itself from current state
+// whenever it is first opened.
+async function repaintAfterColourChange(){
+  const safe = async (what, fn)=>{
+    try{ await fn(); }catch(e){ console.warn(`Could not repaint ${what} after a colour change (non-fatal)`, e); }
+  };
+  const drawn = id => { const el = document.getElementById(id); return !!el && el.innerHTML.trim() !== ''; };
+  await safe('the team switcher', ()=> renderTeamSwitcher());
+  await safe('the team accent', ()=> applyTeamAccent());
+  await safe('the colour dots on People', ()=> refreshMemberColorDots());
+  if(drawn('sched-grid-wrap')) await safe('the week grid', ()=> drawScheduleGrid());
+  // renderViewerScheduleTab rather than the draw call directly: it owns which week the viewer
+  // is looking at, which isn't necessarily the one the admin grid has loaded.
+  if(drawn('viewer-sched-grid-wrap')) await safe("the viewer's week grid", ()=> renderViewerScheduleTab());
+  if(drawn('cal-grid')) await safe('the holidays calendar', ()=>{ drawCalendar(); drawOffThisWeek(); });
+  if(drawn('ghol-grid')) await safe("the department's holidays calendar", ()=> drawGrandCalendar());
+  if(drawn('balance-list')) await safe('rotation balance', ()=> renderBalanceTab());
+  // The department-wide grids re-read every team's week from the database, so they are only
+  // worth redrawing when one of them is the panel actually in front of the person.
+  const activeTab = document.querySelector('.nav-item.active')?.dataset.tab || '';
+  if(activeTab==='grand') await safe('the Grand Schedule', ()=> renderGrandTab());
+  if(activeTab==='grand-balance') await safe('the department rotation balance', ()=> renderGrandBalancePageTab());
+  if(activeTab==='viewer-grand') await safe("the viewer's Grand Schedule", ()=> renderViewerGrandScheduleTab());
+  if(activeTab==='whoson') await safe("Who's on", ()=> renderWhosOnTab());
+}
+// The People grid's dots, updated in place. Not a re-render of that grid: it holds unsaved
+// typing in its other rows, and throwing that away to recolour a dot would be a poor trade.
+// The dashed "automatic" swatch tracks the team's colour, so it moves when the team's does.
+function refreshMemberColorDots(){
+  document.querySelectorAll('.m-color-dot').forEach(dot=>{
+    const m = state.members.find(x=>x.id===dot.dataset.mid);
+    if(m) dot.style.background = barColorFor(m.id, m.teamId).bg;
+  });
+  document.querySelectorAll('.m-color-swatch[data-ci=""]').forEach(sw=>{
+    const m = state.members.find(x=>x.id===sw.dataset.mid);
+    if(m) sw.style.background = colorForTeam(m.teamId).bg;
+  });
 }
 // Same task = same color everywhere, for everyone — used anywhere a task needs to be told
 // apart at a glance without relying on reading its name (e.g. "Your tasks this week").
