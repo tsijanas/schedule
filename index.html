@@ -611,6 +611,7 @@
     min-width:170px; box-shadow:1px 0 0 var(--line);
   }
   .people-table thead .pt-name{ z-index:4; }
+  .people-table .pt-name.color-open{ z-index:30; } /* above the sticky name cells of the rows below, which would otherwise paint over the open swatches */
   .people-table tbody tr.member-card:hover .pt-name{ background:var(--gold-soft); }
   .people-table .pt-name .m-name{ width:100%; border:1px solid transparent; background:none; font-weight:600; padding:3px 5px; }
   .people-table .pt-name .m-name:hover, .people-table .pt-name .m-name:focus{ border-color:var(--line); background:#fff; }
@@ -677,6 +678,8 @@
   .dept-team-row .dept-team-name-edit:hover, .dept-team-row .dept-team-name-edit:focus{
     background:var(--paper); outline:1px solid var(--line); outline-offset:0;
   }
+  .pt-name-line{ display:flex; align-items:center; gap:6px; }
+  .pt-name-line .m-name{ flex:1; min-width:0; }
   .team-color-picker-wrap{ position:relative; flex-shrink:0; }
   .team-color-dot{ width:16px; height:16px; border-radius:50%; border:1.5px solid rgba(0,0,0,0.15); cursor:pointer; padding:0; }
   .team-color-swatches{ display:none; position:absolute; top:22px; left:0; z-index:20; background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); padding:8px; gap:6px; grid-template-columns:repeat(4, 1fr); }
@@ -879,6 +882,7 @@
           <button class="btn-remove-x-wide" id="btn-delete-selected-members" disabled>Delete selected (0)</button>
           <button class="btn small" id="btn-save-all-members">Save changes</button>
         </div>
+        <div class="muted" id="people-color-hint" style="font-size:11.5px; margin:-6px 0 12px 0;"></div>
         <div class="row" style="margin-bottom:14px;">
           <input type="text" id="member-search" placeholder="Search people…" style="max-width:200px;">
           <select id="member-filter-level" style="max-width:130px;">
@@ -3782,7 +3786,11 @@ function closeAllFancySelects(){
   document.querySelectorAll('.fsel-menu.open').forEach(m=> m.classList.remove('open'));
 }
 document.addEventListener('click', (e)=>{ if(!e.target.closest('.fsel')) closeAllFancySelects(); });
-document.addEventListener('click', (e)=>{ if(!e.target.closest('.team-color-picker-wrap')) document.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open')); });
+document.addEventListener('click', (e)=>{
+  if(e.target.closest('.team-color-picker-wrap')) return;
+  document.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
+  document.querySelectorAll('.pt-name.color-open').forEach(td=>td.classList.remove('color-open'));
+});
 function enhanceSelectsIn(root){
   (root||document).querySelectorAll('select').forEach(enhanceSelect);
 }
@@ -4121,6 +4129,24 @@ async function mergeMembers(keepId, absorbId){
   logAudit('member.merge', { kept: keep.name, mergedAwayName: absorb.name });
   return true;
 }
+// The per-person colour dot on the People grid. Only offered for a team that stands on its
+// own: inside a department the team's own colour is what governs (and is set on Department →
+// Teams), so a per-person control there would be a switch wired to nothing.
+function memberColorPickerHtml(m){
+  if(!teamIsStandalone(m.teamId)) return '';
+  const current = barColorFor(m.id, m.teamId);
+  const automatic = colorForTeam(m.teamId);
+  const isAutomatic = !Number.isInteger(m.colorIndex);
+  const swatches = lightPaletteForPicker().map((c,ci)=>
+    `<button type="button" class="team-color-swatch m-color-swatch ${m.colorIndex===ci?'selected':''}" data-mid="${m.id}" data-ci="${ci}" style="background:${c.bg};" title="Give ${escAttr(memberName(m.id))} this colour"></button>`).join('');
+  return `<div class="team-color-picker-wrap">
+    <button type="button" class="team-color-dot m-color-dot" data-mid="${m.id}" style="background:${current.bg};" title="Click to change this person's colour on the schedule"></button>
+    <div class="team-color-swatches">
+      <button type="button" class="team-color-swatch m-color-swatch ${isAutomatic?'selected':''}" data-mid="${m.id}" data-ci="" style="background:${automatic.bg}; border-style:dashed;" title="Automatic — follows the team's colour"></button>
+      ${swatches}
+    </div>
+  </div>`;
+}
 // Builds <option> tags for teams within one department — used for the person-edit card's
 // team picker, both on initial render and to re-populate when a manager's department changes.
 // Falls back to every team if no departments exist yet (nothing to scope to) or the given
@@ -4137,6 +4163,14 @@ function renderTeamTab(){
   const wrap = document.getElementById('team-table-wrap');
   const label = document.getElementById('people-team-label');
   if(label){ const t = currentTeam(); label.textContent = t ? `— viewing ${t.name}` : ''; }
+  // Says which of the two colour controls is the live one for this team, because that depends
+  // on whether it sits in a department — and the team one is easy to miss on another tab.
+  const colorHint = document.getElementById('people-color-hint');
+  if(colorHint){
+    colorHint.textContent = teamIsStandalone(currentTeamId)
+      ? "Colours: click the dot beside a name to give that person their own colour on the schedule."
+      : "Colours: this team is in a department, so every bar here carries the team's colour — that's what tells the teams apart in the Grand views. Change it on Department → Teams.";
+  }
   const tasks = sortedTasksForDisplay(state.tasks);
   // Keep the "eligible for" filter in step with whatever tasks this team currently has.
   const taskFilterSel = document.getElementById('member-filter-task');
@@ -4201,7 +4235,7 @@ function renderTeamTab(){
     html += `<tr class="member-card" data-mid="${m.id}" data-search="${escAttr((m.name+' '+((contact&&contact.email)||'')).toLowerCase())}" data-levels="${escAttr((m.levels||[]).join(','))}" data-role="${m.role||'viewer'}" data-tasks="${escAttr(eligibleIds.join(','))}">
       <td class="pt-sel"><input type="checkbox" class="card-select-check" data-mid="${m.id}"></td>
       <td class="pt-name">
-        <input type="text" class="m-name" value="${escAttr(m.name||'')}" placeholder="${escAttr(nameFromEmail((contact&&contact.email)||'') || 'Name')}">
+        <div class="pt-name-line">${memberColorPickerHtml(m)}<input type="text" class="m-name" value="${escAttr(m.name||'')}" placeholder="${escAttr(nameFromEmail((contact&&contact.email)||'') || 'Name')}"></div>
         <div class="member-card-summary">${roleBadge}${pendingInviteBadge}</div>
         <div class="field-error name-dupe-error"></div>
       </td>
@@ -4384,6 +4418,49 @@ function renderTeamTab(){
     });
     return m;
   }
+  // Per-person colour dots. Saved the moment a swatch is picked, like a team's colour is —
+  // but pointedly WITHOUT re-rendering this grid afterwards, since that would throw away
+  // whatever else is typed into the other rows and not saved yet. The dot and the selected
+  // ring are updated in place instead.
+  wrap.querySelectorAll('.m-color-dot').forEach(dot=>{
+    dot.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const swatches = dot.nextElementSibling;
+      const wasOpen = swatches.classList.contains('open');
+      document.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
+      document.querySelectorAll('.pt-name.color-open').forEach(td=>td.classList.remove('color-open'));
+      if(!wasOpen){
+        swatches.classList.add('open');
+        const cell = dot.closest('.pt-name');
+        if(cell) cell.classList.add('color-open');
+      }
+    });
+  });
+  wrap.querySelectorAll('.m-color-swatch').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const m = state.members.find(x=>x.id===btn.dataset.mid);
+      if(!m) return;
+      const raw = btn.dataset.ci;
+      const previous = m.colorIndex;
+      if(raw === '') delete m.colorIndex; else m.colorIndex = +raw;
+      const menu = btn.closest('.team-color-swatches');
+      menu.querySelectorAll('.m-color-swatch').forEach(s=> s.classList.toggle('selected', s===btn));
+      menu.classList.remove('open');
+      const cell = menu.closest('.pt-name');
+      if(cell) cell.classList.remove('color-open');
+      const dot = menu.parentElement.querySelector('.m-color-dot');
+      if(dot) dot.style.background = barColorFor(m.id, m.teamId).bg;
+      const ok = await persistMembers();
+      if(ok){
+        logAudit('member.color_change', { memberId: m.id, name: memberName(m.id) });
+      } else {
+        if(previous === undefined) delete m.colorIndex; else m.colorIndex = previous;
+        if(dot) dot.style.background = barColorFor(m.id, m.teamId).bg;
+      }
+      if(viewMode === 'admin'){ try{ drawScheduleGrid(); }catch(err){} } // the Schedule tab may be the one on screen
+    });
+  });
   const nameMap = buildNameMap(), emailMap = buildEmailMap();
   wrap.querySelectorAll('.member-card').forEach(card=>{
     refreshDupeState(card, nameMap, emailMap); // catch anything already conflicting on load
@@ -4816,6 +4893,31 @@ function colorForTeam(teamId){
     if(lightPalette[team.colorIndex]) return lightPalette[team.colorIndex];
   }
   return hashToLightColor(teamId);
+}
+// A colour somebody has been given deliberately, or null while they're still on the automatic
+// one. Same convention as a team's: an index into the shared light palette, so it survives a
+// palette reorder no worse than the team colours do.
+function memberColorOverride(memberId){
+  const m = state.members.find(x=>x.id===memberId);
+  if(!m || !Number.isInteger(m.colorIndex)) return null;
+  return lightPaletteForPicker()[m.colorIndex] || null;
+}
+// Whether a team stands on its own rather than inside a department — the difference that
+// decides what a colour on the schedule means. Inside a department, colour is what tells the
+// teams apart in the Grand views, and every bar in that team's own grid is the team's colour.
+// Standing alone there are no other teams to tell apart, so the colour is free to mean the
+// person instead, which is the only way colour carries any information on a single-team setup.
+function teamIsStandalone(teamId){
+  const team = state.teams.find(t=>t.id===teamId);
+  return !!team && !team.departmentId;
+}
+// The colour of one person's bar in their own team's grid.
+function barColorFor(memberId, teamId){
+  if(teamIsStandalone(teamId)){
+    const own = memberColorOverride(memberId);
+    if(own) return own;
+  }
+  return colorForTeam(teamId);
 }
 // Same task = same color everywhere, for everyone — used anywhere a task needs to be told
 // apart at a glance without relying on reading its name (e.g. "Your tasks this week").
@@ -8301,7 +8403,6 @@ function shortDisplayName(memberId, scopeMemberIds){
 
 function buildScheduleTableHtml(teamId){
   const dates = DAYS.map((d,i)=> iso(addDays(currentWeekMonday,i)));
-  const tColor = colorForTeam(teamId);
   const scopeIds = state.members.filter(m=>m.teamId===teamId).map(m=>m.id);
   function runsFor(taskId){
     const task = state.tasks.find(t=>t.id===taskId);
@@ -8371,7 +8472,7 @@ function buildScheduleTableHtml(teamId){
         ${levelShortfalls.length?`<div class="level-shortfall-badge" title="Short on: ${escAttr(levelShortfalls.join(', '))}">short: ${escHtml(levelShortfalls.join(', '))}</div>`:''}
         <div class="chipwrap">`;
       assigned.forEach(mid=>{
-        const pColor = tColor;
+        const pColor = barColorFor(mid, teamId);
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isMe = mid === viewerIdentityId;
         const isSick = run.dates.some(d=> ((state.holidayReasons[mid]||{})[d]) === 'sick');
@@ -9211,6 +9312,10 @@ const HOLIDAY_PALETTE = [
   {bg:'#FFEEBD', fg:'#004654'}, // Lemon soft
 ];
 function colorForMember(memberId){
+  // A deliberate choice wins over the automatic one here too, so somebody's colour is the same
+  // on the Holidays calendar and the Rotation Balance bars as it is on the schedule.
+  const own = memberColorOverride(memberId);
+  if(own) return own;
   let hash = 0;
   for(let i=0;i<memberId.length;i++){ hash = (hash*31 + memberId.charCodeAt(i)) >>> 0; }
   return HOLIDAY_PALETTE[hash % HOLIDAY_PALETTE.length];
@@ -10246,7 +10351,7 @@ function drawViewerScheduleGrid(sched){
       const spanned = span > 1;
       html += `<td ${spanned?`colspan="${span}"`:''} class="${spanned?'spanned-cell':''}"><div class="chipwrap">`;
       run.ids.forEach(mid=>{
-        const pColor = colorForTeam(currentTeamId);
+        const pColor = barColorFor(mid, currentTeamId);
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isMe = mid === viewerIdentityId;
         html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
