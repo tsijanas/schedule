@@ -611,7 +611,6 @@
     min-width:170px; box-shadow:1px 0 0 var(--line);
   }
   .people-table thead .pt-name{ z-index:4; }
-  .people-table .pt-name.color-open{ z-index:30; } /* above the sticky name cells of the rows below, which would otherwise paint over the open swatches */
   .people-table tbody tr.member-card:hover .pt-name{ background:var(--gold-soft); }
   .people-table .pt-name .m-name{ width:100%; border:1px solid transparent; background:none; font-weight:600; padding:3px 5px; }
   .people-table .pt-name .m-name:hover, .people-table .pt-name .m-name:focus{ border-color:var(--line); background:#fff; }
@@ -680,13 +679,22 @@
   }
   .pt-name-line{ display:flex; align-items:center; gap:6px; }
   .pt-name-line .m-name{ flex:1; min-width:0; }
-  .team-color-picker-wrap{ position:relative; flex-shrink:0; }
-  .team-color-dot{ width:16px; height:16px; border-radius:50%; border:1.5px solid rgba(0,0,0,0.15); cursor:pointer; padding:0; }
-  .team-color-swatches{ display:none; position:absolute; top:22px; left:0; z-index:20; background:#fff; border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); padding:8px; gap:6px; grid-template-columns:repeat(4, 1fr); }
-  .team-color-swatches.open{ display:grid; }
-  .team-color-swatch{ width:22px; height:22px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0; }
-  .team-color-swatch:hover{ border-color:rgba(0,0,0,0.2); }
-  .team-color-swatch.selected{ border-color:var(--ink); }
+  .team-color-dot{ width:16px; height:16px; border-radius:50%; border:1.5px solid rgba(0,70,84,0.2); cursor:pointer; padding:0; flex:0 0 auto; }
+  .team-color-dot:hover{ border-color:var(--ink); }
+  /* The palette lives at the end of <body> and is positioned in script, not inside the row
+     that opened it: the People grid scrolls horizontally, and anything absolutely positioned
+     inside it was clipped by that — so the pickers on the last rows of a long team were cut
+     off or invisible until you scrolled. One line, and it flips above the dot near the
+     bottom of the window. */
+  .color-popover{
+    display:none; position:fixed; z-index:1200; background:#fff; border:1px solid var(--line);
+    border-radius:999px; box-shadow:var(--shadow); padding:7px 9px; gap:5px;
+    max-width:calc(100vw - 20px); overflow-x:auto; overflow-y:hidden; scrollbar-width:thin;
+  }
+  .color-popover.open{ display:flex; align-items:center; }
+  .color-swatch{ width:20px; height:20px; border-radius:50%; border:2px solid transparent; cursor:pointer; padding:0; flex:0 0 auto; }
+  .color-swatch:hover{ border-color:rgba(0,70,84,0.35); }
+  .color-swatch.selected{ border-color:var(--ink); }
   .team-row:last-child{ border-bottom:none; }
   .team-row .team-name{ width:190px; font-weight:600; }
   .team-row .team-manager{ width:190px; }
@@ -1629,6 +1637,10 @@ Loreta K.	IC3	Team Lisa	loreta@company.com	TRUE	FALSE	..."></textarea>
 </div>
 
 <div class="toast" id="toast"><span id="toast-msg"></span><button id="toast-undo" style="display:none;">Undo</button></div>
+
+<!-- One shared colour palette for both pickers (a team's, on Department -> Teams, and a
+     person's, on People). At body level on purpose — see .color-popover in the stylesheet. -->
+<div class="color-popover" id="color-popover" role="listbox" aria-label="Pick a colour"></div>
 
 <script type="module">
 // Dev/preview-only fallback: an in-memory fake backend, used solely when the real Firebase
@@ -2722,12 +2734,7 @@ function renderDeptTeamsCard(){
     const tc = colorForTeam(t.id);
     const count = state.members.filter(m=>m.teamId===t.id).length;
     return `<div class="dept-team-row" data-team="${t.id}" style="display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:6px;">
-    <div class="team-color-picker-wrap">
-      <button type="button" class="team-color-dot" data-team="${t.id}" style="background:${tc.bg};" title="Click to change this team's color"></button>
-      <div class="team-color-swatches">
-        ${lightPaletteForPicker().map((c,ci)=>`<button type="button" class="team-color-swatch ${t.colorIndex===ci?'selected':''}" data-team="${t.id}" data-ci="${ci}" style="background:${c.bg};"></button>`).join('')}
-      </div>
-    </div>
+    <button type="button" class="team-color-dot" data-team="${t.id}" style="background:${tc.bg};" title="Click to change this team's colour"></button>
     <input type="text" class="dept-team-name-edit" data-team="${t.id}" value="${escAttr(t.name)}" style="font-size:13.5px; border:none; background:none; padding:2px 4px; flex:1; border-radius:4px;">
     <select class="dept-team-manager-edit" data-team="${t.id}">
       <option value="">— no manager set —</option>
@@ -2809,22 +2816,8 @@ function renderDeptTeamsCard(){
   wrap.querySelectorAll('.team-color-dot').forEach(btn=>{
     btn.addEventListener('click', (e)=>{
       e.stopPropagation();
-      const swatches = btn.nextElementSibling;
-      const wasOpen = swatches.classList.contains('open');
-      wrap.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
-      if(!wasOpen) swatches.classList.add('open');
-    });
-  });
-  wrap.querySelectorAll('.team-color-swatch').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      e.stopPropagation();
-      const team = state.teams.find(t=>t.id===btn.dataset.team);
-      if(!team) return;
-      team.colorIndex = +btn.dataset.ci;
-      const ok = await safeSet('teams', state.teams);
-      if(ok){ logAudit('team.color_change', { name: team.name }); }
-      renderDeptTeamsCard();
-      await repaintAfterColourChange();
+      const already = colorPopoverTarget && colorPopoverTarget.anchor === btn && colorPopoverIsOpen();
+      if(already) closeColorPopover(); else openColorPopover(btn, 'team', btn.dataset.team);
     });
   });
   wrap.querySelectorAll('.dept-team-duplicate-btn').forEach(btn=>{
@@ -3786,9 +3779,8 @@ function closeAllFancySelects(){
 }
 document.addEventListener('click', (e)=>{ if(!e.target.closest('.fsel')) closeAllFancySelects(); });
 document.addEventListener('click', (e)=>{
-  if(e.target.closest('.team-color-picker-wrap')) return;
-  document.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
-  document.querySelectorAll('.pt-name.color-open').forEach(td=>td.classList.remove('color-open'));
+  if(e.target.closest('.color-popover') || e.target.closest('.team-color-dot')) return;
+  if(colorPopoverIsOpen()) closeColorPopover();
 });
 function enhanceSelectsIn(root){
   (root||document).querySelectorAll('select').forEach(enhanceSelect);
@@ -4135,17 +4127,7 @@ async function mergeMembers(keepId, absorbId){
 function memberColorPickerHtml(m){
   if(!personColoursApply(m.teamId)) return '';
   const current = barColorFor(m.id, m.teamId);
-  const automatic = colorForTeam(m.teamId);
-  const isAutomatic = !Number.isInteger(m.colorIndex);
-  const swatches = lightPaletteForPicker().map((c,ci)=>
-    `<button type="button" class="team-color-swatch m-color-swatch ${m.colorIndex===ci?'selected':''}" data-mid="${m.id}" data-ci="${ci}" style="background:${c.bg};" title="Give ${escAttr(memberName(m.id))} this colour"></button>`).join('');
-  return `<div class="team-color-picker-wrap">
-    <button type="button" class="team-color-dot m-color-dot" data-mid="${m.id}" style="background:${current.bg};" title="Click to change this person's colour on the schedule"></button>
-    <div class="team-color-swatches">
-      <button type="button" class="team-color-swatch m-color-swatch ${isAutomatic?'selected':''}" data-mid="${m.id}" data-ci="" style="background:${automatic.bg}; border-style:dashed;" title="Automatic — follows the team's colour"></button>
-      ${swatches}
-    </div>
-  </div>`;
+  return `<button type="button" class="team-color-dot m-color-dot" data-mid="${m.id}" style="background:${current.bg};" title="Click to change ${escAttr(memberName(m.id))}'s colour on the schedule"></button>`;
 }
 // Builds <option> tags for teams within one department — used for the person-edit card's
 // team picker, both on initial render and to re-populate when a manager's department changes.
@@ -4418,47 +4400,14 @@ function renderTeamTab(){
     });
     return m;
   }
-  // Per-person colour dots. Saved the moment a swatch is picked, like a team's colour is —
-  // but pointedly WITHOUT re-rendering this grid afterwards, since that would throw away
-  // whatever else is typed into the other rows and not saved yet. The dot and the selected
-  // ring are updated in place instead.
+  // Per-person colour dots. The palette itself is one shared element at body level (see
+  // openColorPopover) — anything positioned inside this grid was clipped by its own
+  // horizontal scroll, which is why the pickers on the lower rows were cut off.
   wrap.querySelectorAll('.m-color-dot').forEach(dot=>{
     dot.addEventListener('click', (e)=>{
       e.stopPropagation();
-      const swatches = dot.nextElementSibling;
-      const wasOpen = swatches.classList.contains('open');
-      document.querySelectorAll('.team-color-swatches.open').forEach(s=>s.classList.remove('open'));
-      document.querySelectorAll('.pt-name.color-open').forEach(td=>td.classList.remove('color-open'));
-      if(!wasOpen){
-        swatches.classList.add('open');
-        const cell = dot.closest('.pt-name');
-        if(cell) cell.classList.add('color-open');
-      }
-    });
-  });
-  wrap.querySelectorAll('.m-color-swatch').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      e.stopPropagation();
-      const m = state.members.find(x=>x.id===btn.dataset.mid);
-      if(!m) return;
-      const raw = btn.dataset.ci;
-      const previous = m.colorIndex;
-      if(raw === '') delete m.colorIndex; else m.colorIndex = +raw;
-      const menu = btn.closest('.team-color-swatches');
-      menu.querySelectorAll('.m-color-swatch').forEach(s=> s.classList.toggle('selected', s===btn));
-      menu.classList.remove('open');
-      const cell = menu.closest('.pt-name');
-      if(cell) cell.classList.remove('color-open');
-      const dot = menu.parentElement.querySelector('.m-color-dot');
-      if(dot) dot.style.background = barColorFor(m.id, m.teamId).bg;
-      const ok = await persistMembers();
-      if(ok){
-        logAudit('member.color_change', { memberId: m.id, name: memberName(m.id) });
-      } else {
-        if(previous === undefined) delete m.colorIndex; else m.colorIndex = previous;
-        if(dot) dot.style.background = barColorFor(m.id, m.teamId).bg;
-      }
-      await repaintAfterColourChange();
+      const already = colorPopoverTarget && colorPopoverTarget.anchor === dot && colorPopoverIsOpen();
+      if(already) closeColorPopover(); else openColorPopover(dot, 'member', dot.dataset.mid);
     });
   });
   const nameMap = buildNameMap(), emailMap = buildEmailMap();
@@ -4877,11 +4826,39 @@ function escHtml(s){ return escapeAll(s); }
 // Light-only subset of the shared palette: this gets used as a *full* background in some
 // contexts (not just a tint), so it must never land on the palette's one dark entry, which
 // would make dark ink text illegible without extra per-color contrast logic.
-function lightPaletteForPicker(){
+function autoPalette(){
   return HOLIDAY_PALETTE.filter(c=>c.fg!=='#EDFFE9');
 }
+// Everything a colour can be picked from. The seven above come first and in their original
+// order, because a team's or a person's colorIndex is an index into THIS list — inserting or
+// reordering anything ahead of them would quietly change the colour of everyone already using
+// one. New colours therefore only ever go on the end.
+//
+// Each entry carries the ink to write on it, and every pairing here clears 4.5:1 against its
+// own background, including the three dark ones, which is what lets those be offered at all:
+// they are reachable only by picking them deliberately, never by the automatic hash above.
+const EXTRA_PICKER_COLORS = [
+  {bg:'#EDFFE9', fg:'#004654'}, // Mint
+  {bg:'#A8E6CF', fg:'#004654'}, // Sea green
+  {bg:'#7FD1BE', fg:'#004654'}, // Teal
+  {bg:'#A8D8F0', fg:'#004654'}, // Sky
+  {bg:'#7FB2E5', fg:'#004654'}, // Blue
+  {bg:'#C7D98C', fg:'#004654'}, // Olive
+  {bg:'#F7C3D6', fg:'#004654'}, // Rose
+  {bg:'#EF9BB8', fg:'#004654'}, // Pink
+  {bg:'#E7B6F0', fg:'#004654'}, // Orchid
+  {bg:'#004654', fg:'#EDFFE9'}, // Deep teal
+  {bg:'#33366B', fg:'#EDFFE9'}, // Indigo
+  {bg:'#8A3A1E', fg:'#EDFFE9'}, // Brick
+];
+function lightPaletteForPicker(){
+  return autoPalette().concat(EXTRA_PICKER_COLORS);
+}
 function hashToLightColor(str){
-  const lightPalette = lightPaletteForPicker();
+  // Deliberately the original seven, NOT the full picker list: this is what every automatic
+  // colour comes out of — teams nobody has picked a colour for, task chips — and it is a
+  // straight modulo, so extending the list it reads from would silently repaint all of them.
+  const lightPalette = autoPalette();
   let hash = 0;
   for(let i=0;i<str.length;i++){ hash = (hash*31 + str.charCodeAt(i)) >>> 0; }
   return lightPalette[hash % lightPalette.length];
@@ -4961,6 +4938,98 @@ async function repaintAfterColourChange(){
   if(activeTab==='viewer-grand') await safe("the viewer's Grand Schedule", ()=> renderViewerGrandScheduleTab());
   if(activeTab==='whoson') await safe("Who's on", ()=> renderWhosOnTab());
 }
+// ---- The shared colour palette popover ----
+// Opened by either dot: a team's on Department -> Teams, a person's on People. One element,
+// one line of swatches, positioned against whichever dot was clicked and clamped to the
+// window, so a person at the bottom of a long team gets the same palette as one at the top.
+let colorPopoverTarget = null; // { kind:'team'|'member', id, anchor }
+function colorPopoverEl(){ return document.getElementById('color-popover'); }
+function openColorPopover(anchor, kind, id){
+  const pop = colorPopoverEl();
+  if(!pop) return;
+  const subject = kind==='team' ? state.teams.find(t=>t.id===id) : state.members.find(m=>m.id===id);
+  if(!subject) return;
+  const chosen = Number.isInteger(subject.colorIndex) ? subject.colorIndex : null;
+  // What "automatic" means differs: a team falls back to the colour its id hashes to, a
+  // person falls back to their team's.
+  const automatic = kind==='team' ? hashToLightColor(id) : colorForTeam(subject.teamId);
+  pop.innerHTML = `<button type="button" class="color-swatch ${chosen===null?'selected':''}" data-ci="" style="background:${automatic.bg}; border-style:dashed;" title="Automatic"></button>`
+    + lightPaletteForPicker().map((c,ci)=>
+        `<button type="button" class="color-swatch ${chosen===ci?'selected':''}" data-ci="${ci}" style="background:${c.bg};"></button>`).join('');
+  colorPopoverTarget = { kind, id, anchor };
+  pop.classList.add('open');
+  pop.scrollLeft = 0;
+  positionColorPopover();
+}
+function positionColorPopover(){
+  const pop = colorPopoverEl();
+  if(!pop || !colorPopoverTarget || !colorPopoverTarget.anchor) return;
+  const r = colorPopoverTarget.anchor.getBoundingClientRect();
+  if(r.width === 0 && r.height === 0){ closeColorPopover(); return; } // the row went away under us
+  const w = pop.offsetWidth, h = pop.offsetHeight, margin = 8;
+  let left = Math.min(r.left - 6, window.innerWidth - w - margin);
+  left = Math.max(margin, left);
+  let top = r.bottom + 6;
+  if(top + h > window.innerHeight - margin) top = Math.max(margin, r.top - h - 6); // flip above
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+function closeColorPopover(){
+  const pop = colorPopoverEl();
+  if(pop) pop.classList.remove('open');
+  colorPopoverTarget = null;
+}
+function colorPopoverIsOpen(){ return !!colorPopoverEl()?.classList.contains('open'); }
+// One place where a pick is actually stored, for either kind. Returns false if the write was
+// refused, so the caller can put the dot back rather than show a colour nothing agrees with.
+async function applyColorChoice(kind, id, colorIndex){
+  if(kind==='team'){
+    const team = state.teams.find(t=>t.id===id);
+    if(!team) return false;
+    const previous = team.colorIndex;
+    if(colorIndex === null) delete team.colorIndex; else team.colorIndex = colorIndex;
+    const ok = await safeSet('teams', state.teams);
+    if(ok){ logAudit('team.color_change', { name: team.name }); }
+    else if(previous === undefined) delete team.colorIndex; else team.colorIndex = previous;
+    return ok;
+  }
+  const m = state.members.find(x=>x.id===id);
+  if(!m) return false;
+  const previous = m.colorIndex;
+  if(colorIndex === null) delete m.colorIndex; else m.colorIndex = colorIndex;
+  const ok = await persistMembers();
+  if(ok){ logAudit('member.color_change', { memberId: m.id, name: memberName(m.id) }); }
+  else if(previous === undefined) delete m.colorIndex; else m.colorIndex = previous;
+  return ok;
+}
+// Wired once, on the shared element, rather than per row — the People grid rebuilds itself
+// often and this way there is nothing per-row left to re-wire.
+document.getElementById('color-popover')?.addEventListener('click', async (e)=>{
+  const btn = e.target.closest('.color-swatch');
+  if(!btn || !colorPopoverTarget) return;
+  e.stopPropagation();
+  const { kind, id } = colorPopoverTarget;
+  const raw = btn.dataset.ci;
+  closeColorPopover();
+  const ok = await applyColorChoice(kind, id, raw === '' ? null : +raw);
+  if(kind==='team') renderDeptTeamsCard(); // its own row shows the colour it just took
+  await repaintAfterColourChange();
+  if(!ok) showToast("Couldn't save that colour — nothing was changed", null);
+});
+document.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && colorPopoverIsOpen()) closeColorPopover(); });
+// A fixed-position element doesn't travel with the page, so it is re-aimed at the dot on any
+// scroll or resize — including the scroll a browser does by itself when it focuses a button
+// near the edge of a scrolling container, which is exactly where the clipped pickers were —
+// and closed only once the dot it belongs to has actually left the window. Capture phase, so
+// scrolling inside the People grid counts and not just the page.
+window.addEventListener('resize', ()=>{ if(colorPopoverIsOpen()) positionColorPopover(); });
+window.addEventListener('scroll', ()=>{
+  if(!colorPopoverIsOpen()) return;
+  const anchor = colorPopoverTarget && colorPopoverTarget.anchor;
+  const r = anchor && anchor.getBoundingClientRect();
+  if(!r || r.bottom < 0 || r.top > window.innerHeight){ closeColorPopover(); return; }
+  positionColorPopover();
+}, true);
 // The People grid's dots, updated in place. Not a re-render of that grid: it holds unsaved
 // typing in its other rows, and throwing that away to recolour a dot would be a poor trade.
 // The dashed "automatic" swatch tracks the team's colour, so it moves when the team's does.
@@ -4968,10 +5037,6 @@ function refreshMemberColorDots(){
   document.querySelectorAll('.m-color-dot').forEach(dot=>{
     const m = state.members.find(x=>x.id===dot.dataset.mid);
     if(m) dot.style.background = barColorFor(m.id, m.teamId).bg;
-  });
-  document.querySelectorAll('.m-color-swatch[data-ci=""]').forEach(sw=>{
-    const m = state.members.find(x=>x.id===sw.dataset.mid);
-    if(m) sw.style.background = colorForTeam(m.teamId).bg;
   });
 }
 // Same task = same color everywhere, for everyone — used anywhere a task needs to be told
