@@ -855,6 +855,7 @@
         Insights<span class="nav-submenu-arrow">▾</span>
       </button>
       <div class="nav-submenu" id="submenu-dept-insights" style="display:none;">
+        <button class="nav-item admin-only" data-tab="grand-coverage" id="nav-grand-coverage">Coverage</button>
         <button class="nav-item admin-only" data-tab="grand-balance" id="nav-grand-balance">Rotation Balance</button>
         <button class="nav-item admin-only" data-tab="grand-registry" id="nav-grand-registry">Registry</button>
       </div>
@@ -871,7 +872,7 @@
         Team Insights<span class="nav-submenu-arrow">▾</span>
       </button>
       <div class="nav-submenu" id="submenu-team-insights" style="display:none;">
-        <button class="nav-item admin-only" data-tab="coverage">Coverage</button>
+        <button class="nav-item admin-only" data-tab="coverage" id="nav-coverage">Coverage</button>
         <button class="nav-item admin-only" data-tab="balance">Rotation Balance</button>
       </div>
 
@@ -1143,6 +1144,30 @@
       <div class="card" id="cov-card">
         <div id="cov-wrap"></div>
         <div class="cov-legend" id="cov-legend"></div>
+      </div>
+    </div>
+
+    <!-- COVERAGE, DEPARTMENT-WIDE -->
+    <div class="tab-panel" id="tab-grand-coverage">
+      <div class="page-head">
+        <h1>Coverage <span class="muted" style="font-weight:400; font-size:14px;" id="gcov-dept-name"></span></h1>
+        <p>Every team in this department in one table: how many people are on each task each day, against what the teams' requirements add up to. One row per task name, the same grouping the Grand Schedule uses.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="week-nav">
+            <button id="gcov-wk-prev">‹</button>
+            <div class="wk-label" id="gcov-wk-label"></div>
+            <button id="gcov-wk-next">›</button>
+          </div>
+          <div class="spacer"></div>
+          <label class="chip-check" title="Show the requirement beside each number, and tint anything that misses it"><input type="checkbox" id="gcov-show-req" checked> vs requirement</label>
+          <button class="btn secondary small" id="btn-gcov-copy" title="Copy the table as tab-separated values, ready to paste into a spreadsheet">Copy for spreadsheet</button>
+        </div>
+      </div>
+      <div class="card">
+        <div id="gcov-wrap"></div>
+        <div class="cov-legend" id="gcov-legend"></div>
       </div>
     </div>
 
@@ -3705,6 +3730,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='schedule') renderScheduleTab();
     if(btn.dataset.tab==='balance') renderBalanceTab();
     if(btn.dataset.tab==='coverage') renderCoverageTab();
+    if(btn.dataset.tab==='grand-coverage') renderGrandCoverageTab();
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
     if(btn.dataset.tab==='grand-holidays') renderGrandHolidaysTab();
@@ -5132,6 +5158,7 @@ function renderTeamSwitcher(){
       const el = document.getElementById(id);
       if(el) el.style.display = showGrand ? '' : 'none';
     });
+    syncCoverageNavVisibility(); // Coverage sits at whichever level applies to this team
     if(!showGrand){
       const sub = document.getElementById('submenu-dept-insights');
       const toggle = document.getElementById('toggle-dept-insights');
@@ -8429,31 +8456,72 @@ async function generateWeek(weekMon, opts){
   return schedule;
 }
 
-// ================= COVERAGE TAB =================
+// ================= COVERAGE =================
 // The matrix a manager otherwise keeps by hand: tasks down the side, the week's days across
-// the top, and the number of people on each task each day — with the requirement folded in so
-// a gap is visible without cross-referencing the Schedule. Reads the same saved week the
-// Schedule tab reads; nothing here writes anything.
-let coverageWeekMonday = null;
-function coverageShowReq(){ return !!document.getElementById('cov-show-req')?.checked; }
-// One row per task, one entry per day: what the requirement asks, and who is actually on it.
-// Bank holidays are treated exactly as the Schedule grid treats them — the requirement for
-// that day is zero, so a day nobody works isn't reported as a shortfall.
-function coverageRows(sched, dates){
+// the top, the number of people on each task each day, and the requirement folded into the
+// same cell so a gap is visible without cross-referencing the Schedule.
+//
+// It exists at two levels, and which one a person sees follows the same rule as colours —
+// the department's "Combine its teams" setting. With it on, the teams share their tasks and
+// the useful question is department-wide, so Coverage lives under Department → Insights and
+// sums each task name across the teams that run it. With it off (or no department at all),
+// the team is the whole picture, so it lives under Team → Insights instead. Only one of the
+// two is ever offered (see syncCoverageNavVisibility).
+//
+// One table builder serves both. That is deliberate: the schedule grids grew four near-copies
+// of the same markup, and every change since has had to be made in all of them.
+let coverageWeekMonday = null;      // team-level
+let grandCoverageWeekMonday = null; // department-level
+
+function coverageShowReq(scope){
+  const el = document.getElementById(scope==='dept' ? 'gcov-show-req' : 'cov-show-req');
+  return !!el?.checked;
+}
+// One row per task: what the requirement asks each day, and who is actually on it. Bank
+// holidays are treated exactly as the Schedule grid treats them — requirement zero for that
+// day — so a day nobody works is never reported as a shortfall.
+function coverageRowsForTeam(sched, dates){
   return sortedTasksForDisplay(state.tasks).map(task=>{
     const days = dates.map((dISO, i)=>{
       const bh = isBankHoliday(dISO);
-      const need = bh ? 0 : ((state.req[task.id]||{})[DAYS[i]] || 0);
-      const assigned = ((sched[dISO]||{})[task.id] || []).length;
-      return { dISO, need, assigned, bh };
+      return { need: bh ? 0 : ((state.req[task.id]||{})[DAYS[i]] || 0),
+               assigned: ((sched[dISO]||{})[task.id] || []).length, bh };
     });
-    return { task, days,
-      weekAssigned: days.reduce((s,d)=> s+d.assigned, 0),
-      weekNeed: days.reduce((s,d)=> s+d.need, 0) };
+    return { label: task.name, days };
   });
 }
-function coverageCellHtml(d){
-  const showReq = coverageShowReq();
+// Department-wide: one row per task NAME (the Grand Schedule's own grouping), adding up both
+// the people and the requirements of every team that runs it.
+async function coverageRowsForDepartment(dates, weekISO){
+  const groups = grandTaskGroups(currentDepartmentId);
+  const teamIds = [...new Set(Object.values(groups).flatMap(g=> g.perTeam.map(pt=>pt.team.id)))];
+  const scheds = {};
+  await Promise.all(teamIds.map(async id=>{ scheds[id] = await loadWeekForTeam(id, weekISO); }));
+  return Object.values(groups)
+    .sort((a,b)=> a.displayName.localeCompare(b.displayName))
+    .map(g=>{
+      const days = dates.map((dISO, i)=>{
+        const bh = isBankHoliday(dISO);
+        let need = 0, assigned = 0;
+        g.perTeam.forEach(({team, task})=>{
+          if(!bh) need += ((state.reqByTeam[team.id]||{})[task.id]||{})[DAYS[i]] || 0;
+          assigned += (((scheds[team.id]||{})[dISO]||{})[task.id] || []).length;
+        });
+        return { need, assigned, bh };
+      });
+      return { label: g.displayName, days, teams: g.perTeam.length };
+    });
+}
+// Averages are per day the task actually runs — days with a requirement, or days somebody is
+// on it anyway. Averaging across all seven would quietly halve every weekday-only task.
+function coverageAverage(days){
+  const live = days.filter(d=> d.need>0 || d.assigned>0);
+  const n = live.length || 1;
+  return { assigned: live.reduce((s,d)=>s+d.assigned,0)/n,
+           need: live.reduce((s,d)=>s+d.need,0)/n, days: live.length };
+}
+const covNum = v => (Math.round(v*10)/10).toFixed(1).replace(/\.0$/, '');
+function coverageCellHtml(d, showReq){
   const short = showReq && d.assigned < d.need;
   const over = showReq && d.need > 0 && d.assigned > d.need;
   const cls = short ? 'cov-short' : over ? 'cov-over' : (d.assigned===0 ? 'cov-zero' : '');
@@ -8464,6 +8532,62 @@ function coverageCellHtml(d){
     : `${d.assigned} assigned, requirement ${d.need}`;
   return `<td class="${d.bh?'cov-bh':''}" title="${escAttr(title)}"><span class="cov-cell ${cls}">${d.assigned}${reqPart}</span></td>`;
 }
+// The shared table: rows x days, an average column on the right, and a totals row underneath
+// that adds every task up for that day.
+function coverageTableHtml(rows, dates, weekMonday, showReq, firstColLabel){
+  let html = `<div class="people-table-scroll"><table class="cov-table"><thead><tr><th class="cov-task">${escHtml(firstColLabel)}</th>`;
+  dates.forEach((dISO,i)=>{
+    const dt = addDays(weekMonday,i);
+    const bh = bankHolidayName(dISO);
+    html += `<th title="${escAttr(bh||'')}">${DAY_LABELS[DAYS[i]].slice(0,3)}<span class="cov-dnum">${dt.getDate()}${bh?' •':''}</span></th>`;
+  });
+  html += `<th class="cov-week" title="Average per day, counting only the days this task runs">Avg / day</th></tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const avg = coverageAverage(r.days);
+    const avgShort = showReq && avg.assigned < avg.need - 0.05;
+    const teamNote = r.teams>1 ? ` — across ${r.teams} teams` : '';
+    html += `<tr><td class="cov-task" title="${escAttr(r.label+teamNote)}">${escHtml(r.label)}</td>`;
+    r.days.forEach(d=> html += coverageCellHtml(d, showReq));
+    html += `<td class="cov-week" title="${escAttr(`Averaged over the ${avg.days} day${avg.days===1?'':'s'} this task runs`)}"><span class="cov-cell ${avgShort?'cov-short':(avg.assigned===0?'cov-zero':'')}">${covNum(avg.assigned)}${showReq?`<span class="cov-req">/${covNum(avg.need)}</span>`:''}</span></td></tr>`;
+  });
+  // Every task added together, per day — the load the whole team (or department) is carrying.
+  const totals = dates.map((_,i)=> ({
+    assigned: rows.reduce((s,r)=> s + r.days[i].assigned, 0),
+    need: rows.reduce((s,r)=> s + r.days[i].need, 0),
+    bh: rows.length ? rows[0].days[i].bh : false,
+  }));
+  html += `<tr class="cov-total-row"><td class="cov-task">All tasks</td>`;
+  totals.forEach(t=>{
+    const short = showReq && t.assigned < t.need;
+    html += `<td title="${escAttr(`${t.assigned} assigned in total, requirement ${t.need}`)}"><span class="cov-cell ${short?'cov-short':''}">${t.assigned}${showReq?`<span class="cov-req">/${t.need}</span>`:''}</span></td>`;
+  });
+  const tAvg = coverageAverage(totals);
+  html += `<td class="cov-week" title="Average people per day across every task"><span class="cov-cell ${showReq && tAvg.assigned < tAvg.need - 0.05 ?'cov-short':''}">${covNum(tAvg.assigned)}${showReq?`<span class="cov-req">/${covNum(tAvg.need)}</span>`:''}</span></td></tr>`;
+  html += `</tbody></table></div>`;
+  return html;
+}
+function coverageLegendHtml(showReq, extra){
+  if(!showReq) return `<span>Each cell is how many people are on that task that day. The right-hand column averages the days it runs.</span>`;
+  return `<span><span class="sw" style="background:var(--brick-soft);"></span>short of the requirement</span>
+    <span><span class="sw" style="background:var(--gold-soft);"></span>more than asked for</span>
+    <span>Each cell is <strong>people assigned</strong> / <strong>requirement</strong>. The last row adds every task up for that day; the last column averages the days a task runs.</span>
+    ${extra ? `<span class="muted">${escHtml(extra)}</span>` : ''}`;
+}
+// Tab-separated, because the thing this replaces is a spreadsheet — paste straight into one.
+function coverageTsv(rows, dates, showReq, firstColLabel){
+  const cell = d => showReq ? `${d.assigned}/${d.need}` : `${d.assigned}`;
+  const lines = [[firstColLabel, ...dates, 'Avg/day'].join('\t')];
+  rows.forEach(r=>{
+    const avg = coverageAverage(r.days);
+    lines.push([r.label, ...r.days.map(cell), showReq?`${covNum(avg.assigned)}/${covNum(avg.need)}`:covNum(avg.assigned)].join('\t'));
+  });
+  const totals = dates.map((_,i)=> ({
+    assigned: rows.reduce((s,r)=> s + r.days[i].assigned, 0),
+    need: rows.reduce((s,r)=> s + r.days[i].need, 0) }));
+  const tAvg = coverageAverage(totals);
+  lines.push(['ALL TASKS', ...totals.map(cell), showReq?`${covNum(tAvg.assigned)}/${covNum(tAvg.need)}`:covNum(tAvg.assigned)].join('\t'));
+  return lines.join('\n');
+}
 async function renderCoverageTab(){
   if(!coverageWeekMonday) coverageWeekMonday = new Date(currentWeekMonday);
   const label = document.getElementById('cov-team-label');
@@ -8473,79 +8597,84 @@ async function renderCoverageTab(){
   wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
   const dates = DAYS.map((d,i)=> iso(addDays(coverageWeekMonday,i)));
   const sched = await loadWeekForTeam(currentTeamId, iso(coverageWeekMonday));
-  const rows = coverageRows(sched, dates);
+  const rows = coverageRowsForTeam(sched, dates);
   if(rows.length===0){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">This team has no tasks yet — add some under Team → Tasks.</div>`;
     document.getElementById('cov-legend').innerHTML = '';
     return;
   }
-  let html = `<div class="people-table-scroll"><table class="cov-table"><thead><tr><th class="cov-task">Task</th>`;
-  dates.forEach((dISO,i)=>{
-    const dt = addDays(coverageWeekMonday,i);
-    const bh = bankHolidayName(dISO);
-    html += `<th title="${escAttr(bh||'')}">${DAY_LABELS[DAYS[i]].slice(0,3)}<span class="cov-dnum">${dt.getDate()}${bh?' •':''}</span></th>`;
-  });
-  html += `<th class="cov-week">Week</th></tr></thead><tbody>`;
-  rows.forEach(r=>{
-    html += `<tr><td class="cov-task" title="${escAttr(r.task.name)}">${escHtml(r.task.name)}</td>`;
-    r.days.forEach(d=> html += coverageCellHtml(d));
-    const weekShort = coverageShowReq() && r.weekAssigned < r.weekNeed;
-    html += `<td class="cov-week"><span class="cov-cell ${weekShort?'cov-short':(r.weekAssigned===0?'cov-zero':'')}">${r.weekAssigned}${coverageShowReq()?`<span class="cov-req">/${r.weekNeed}</span>`:''}</span></td></tr>`;
-  });
-  // Column totals, the way the hand-kept version has them: how many person-days the whole
-  // team is carrying that day, against how many the requirement asks for.
-  const totals = dates.map((_,i)=> rows.reduce((s,r)=> s + r.days[i].assigned, 0));
-  const totalNeeds = dates.map((_,i)=> rows.reduce((s,r)=> s + r.days[i].need, 0));
-  html += `<tr class="cov-total-row"><td class="cov-task">Total</td>`;
-  totals.forEach((v,i)=>{
-    const short = coverageShowReq() && v < totalNeeds[i];
-    html += `<td><span class="cov-cell ${short?'cov-short':''}">${v}${coverageShowReq()?`<span class="cov-req">/${totalNeeds[i]}</span>`:''}</span></td>`;
-  });
-  const wk = totals.reduce((s,v)=>s+v,0), wkNeed = totalNeeds.reduce((s,v)=>s+v,0);
-  html += `<td class="cov-week"><span class="cov-cell ${coverageShowReq()&&wk<wkNeed?'cov-short':''}">${wk}${coverageShowReq()?`<span class="cov-req">/${wkNeed}</span>`:''}</span></td></tr>`;
-  html += `</tbody></table></div>`;
-  wrap.innerHTML = html;
+  const showReq = coverageShowReq('team');
+  wrap.innerHTML = coverageTableHtml(rows, dates, coverageWeekMonday, showReq, 'Task');
   const people = availabilityByDay(teamMembers(), coverageWeekMonday);
-  document.getElementById('cov-legend').innerHTML = coverageShowReq()
-    ? `<span><span class="sw" style="background:var(--brick-soft);"></span>short of the requirement</span>
-       <span><span class="sw" style="background:var(--gold-soft);"></span>more than asked for</span>
-       <span>Each cell is <strong>people assigned</strong> / <strong>requirement</strong>. Week is the sum of the days (person-days).</span>
-       <span class="muted">${people.scheduleableCount} schedulable ${people.scheduleableCount===1?'person':'people'} on this team.</span>`
-    : `<span>Each cell is how many people are on that task that day. Week is the sum of the days (person-days).</span>`;
+  document.getElementById('cov-legend').innerHTML = coverageLegendHtml(showReq,
+    `${people.scheduleableCount} schedulable ${people.scheduleableCount===1?'person':'people'} on this team.`);
 }
-// Tab-separated, because the thing this replaces is a spreadsheet — paste straight into one.
-function coverageTsv(rows, dates){
-  const head = ['Task', ...dates, 'Week'].join('\t');
-  const body = rows.map(r=> [r.task.name, ...r.days.map(d=> coverageShowReq()? `${d.assigned}/${d.need}` : d.assigned), coverageShowReq()? `${r.weekAssigned}/${r.weekNeed}` : r.weekAssigned].join('\t'));
-  const totals = ['TOTAL', ...dates.map((_,i)=>{
-    const a = rows.reduce((s,r)=> s+r.days[i].assigned, 0);
-    const n = rows.reduce((s,r)=> s+r.days[i].need, 0);
-    return coverageShowReq()? `${a}/${n}` : a;
-  }), coverageShowReq()
-      ? `${rows.reduce((s,r)=>s+r.weekAssigned,0)}/${rows.reduce((s,r)=>s+r.weekNeed,0)}`
-      : rows.reduce((s,r)=>s+r.weekAssigned,0)].join('\t');
-  return [head, ...body, totals].join('\n');
+async function renderGrandCoverageTab(){
+  if(!ensureDepartmentSelected()){
+    document.getElementById('gcov-wrap').innerHTML = `<div class="muted" style="font-size:12.5px;">No department is set up yet — see the Departments tab.</div>`;
+    return;
+  }
+  if(!grandCoverageWeekMonday) grandCoverageWeekMonday = new Date(grandWeekMonday || currentWeekMonday);
+  document.getElementById('gcov-dept-name').textContent = departmentNameLine();
+  document.getElementById('gcov-wk-label').textContent = fmtWeek(grandCoverageWeekMonday);
+  const wrap = document.getElementById('gcov-wrap');
+  wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
+  const dates = DAYS.map((d,i)=> iso(addDays(grandCoverageWeekMonday,i)));
+  const rows = await coverageRowsForDepartment(dates, iso(grandCoverageWeekMonday));
+  if(rows.length===0){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No tasks in this department yet.</div>`;
+    document.getElementById('gcov-legend').innerHTML = '';
+    return;
+  }
+  const showReq = coverageShowReq('dept');
+  wrap.innerHTML = coverageTableHtml(rows, dates, grandCoverageWeekMonday, showReq, 'Task');
+  const teams = teamsInDepartment(currentDepartmentId);
+  const heads = state.members.filter(m=> teams.some(t=>t.id===m.teamId) && (m.levels||[]).some(l=>LEVELS.includes(l))).length;
+  document.getElementById('gcov-legend').innerHTML = coverageLegendHtml(showReq,
+    `${teams.length} team${teams.length===1?'':'s'}, ${heads} schedulable ${heads===1?'person':'people'}.`);
+}
+// Only one of the two is ever on offer: the department-wide one where the teams are combined,
+// the team one where they aren't. Called from renderTeamSwitcher, which already runs whenever
+// the team, department or that setting changes.
+function syncCoverageNavVisibility(){
+  const grandCombines = teamSharesGrandViews(currentTeamId);
+  const teamItem = document.getElementById('nav-coverage');
+  const deptItem = document.getElementById('nav-grand-coverage');
+  if(teamItem) teamItem.style.display = grandCombines ? 'none' : '';
+  if(deptItem) deptItem.style.display = grandCombines ? '' : 'none';
+  // If the hidden one happens to be the open tab, move to the one that applies.
+  const active = document.querySelector('.nav-item.active');
+  if(active && active.dataset.tab==='coverage' && grandCombines && deptItem) deptItem.click();
+  if(active && active.dataset.tab==='grand-coverage' && !grandCombines && teamItem) teamItem.click();
 }
 document.getElementById('cov-wk-prev').addEventListener('click', ()=>{ coverageWeekMonday = addDays(coverageWeekMonday,-7); renderCoverageTab(); });
 document.getElementById('cov-wk-next').addEventListener('click', ()=>{ coverageWeekMonday = addDays(coverageWeekMonday,7); renderCoverageTab(); });
 document.getElementById('cov-show-req').addEventListener('change', ()=> renderCoverageTab());
-document.getElementById('btn-cov-copy').addEventListener('click', async ()=>{
-  const dates = DAYS.map((d,i)=> iso(addDays(coverageWeekMonday,i)));
-  const sched = await loadWeekForTeam(currentTeamId, iso(coverageWeekMonday));
-  const tsv = coverageTsv(coverageRows(sched, dates), dates);
+document.getElementById('gcov-wk-prev').addEventListener('click', ()=>{ grandCoverageWeekMonday = addDays(grandCoverageWeekMonday,-7); renderGrandCoverageTab(); });
+document.getElementById('gcov-wk-next').addEventListener('click', ()=>{ grandCoverageWeekMonday = addDays(grandCoverageWeekMonday,7); renderGrandCoverageTab(); });
+document.getElementById('gcov-show-req').addEventListener('change', ()=> renderGrandCoverageTab());
+async function copyCoverage(scope){
+  const monday = scope==='dept' ? grandCoverageWeekMonday : coverageWeekMonday;
+  const dates = DAYS.map((d,i)=> iso(addDays(monday,i)));
+  const rows = scope==='dept'
+    ? await coverageRowsForDepartment(dates, iso(monday))
+    : coverageRowsForTeam(await loadWeekForTeam(currentTeamId, iso(monday)), dates);
+  const tsv = coverageTsv(rows, dates, coverageShowReq(scope), 'Task');
   try{
     await navigator.clipboard.writeText(tsv);
     showToast('Copied — paste it into a spreadsheet');
   }catch(e){
     // Clipboard access can be refused (permissions, an insecure origin); a textarea the person
     // can copy from by hand beats a button that silently does nothing.
-    const wrap = document.getElementById('cov-wrap');
+    const wrap = document.getElementById(scope==='dept' ? 'gcov-wrap' : 'cov-wrap');
     const ta = document.createElement('textarea');
     ta.value = tsv; ta.style.cssText = 'width:100%; height:130px; margin-top:12px; font-family:monospace; font-size:11.5px;';
     wrap.appendChild(ta); ta.select();
     showToast("Couldn't reach the clipboard — copy it from the box below");
   }
-});
+}
+document.getElementById('btn-cov-copy').addEventListener('click', ()=> copyCoverage('team'));
+document.getElementById('btn-gcov-copy').addEventListener('click', ()=> copyCoverage('dept'));
 
 // ================= SCHEDULE TAB =================
 async function renderScheduleTab(){
