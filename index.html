@@ -7574,8 +7574,8 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
               return `<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</button>`;
             }).join('');
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
-          <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${team.name}${isSick?' — out of office, consider replacing':' — click to see options'}">
-            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, departmentMemberIds(currentDepartmentId))}</span></span>
+          <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${escAttr(team.name)}${isSick?' — out of office, consider replacing':' — click to see options'}">
+            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, departmentMemberIds(currentDepartmentId)))}</span></span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">
             <button class="bar-menu-item" data-action="delete">${runDates.length>1?'Delete — whole run':'Delete'}</button>
@@ -8597,7 +8597,7 @@ function buildScheduleTableHtml(teamId){
         const isSick = run.dates.some(d=> ((state.holidayReasons[mid]||{})[d]) === 'sick');
         html += `<div class="bar-item">
           <button class="bar ${assigned.length>need?'short':''} ${isMe?'me':''} ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${isSick?'Out of office — consider replacing':'Click to see options'}">
-            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">${mainBarMenuHtml(task.id, run.dates, mid, assigned)}</div>
         </div>`;
@@ -8761,7 +8761,9 @@ async function removeFromOneDay(taskId, dateISO, memberId, refreshAfterUndo){
     });
     if(refreshAfterUndo) await refreshAfterUndo();
   });
-  showToast(`${shortDisplayName(memberId, [])} taken off ${dayAndDateLabel(dateISO)} — still on the other days`, undoLast);
+  // memberName, not shortDisplayName: with no scope to disambiguate against, the short form
+  // is just a first name, and "Person taken off Wed 23" tells you nothing on a team with two.
+  showToast(`${memberName(memberId)} taken off ${dayAndDateLabel(dateISO)} — still on the other days`, undoLast);
   return true;
 }
 // incomingDates, when given, are the only days the incoming person takes — they may be free
@@ -10474,7 +10476,7 @@ function drawViewerScheduleGrid(sched){
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isMe = mid === viewerIdentityId;
         html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
-          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
         </div></div>`;
       });
       html += `</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
@@ -10577,7 +10579,7 @@ function viewerGrandTaskRowHtml(g, scheds, dates, scopeIds){
         const pColor = barColorFor(mid, team.id);
         const isMe = mid === viewerIdentityId;
         bars += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};" title="${escAttr(team.name)}">
-          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
         </div></div>`;
       });
     });
