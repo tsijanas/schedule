@@ -4128,11 +4128,12 @@ async function mergeMembers(keepId, absorbId){
   logAudit('member.merge', { kept: keep.name, mergedAwayName: absorb.name });
   return true;
 }
-// The per-person colour dot on the People grid. Only offered for a team that stands on its
-// own: inside a department the team's own colour is what governs (and is set on Department →
-// Teams), so a per-person control there would be a switch wired to nothing.
+// The per-person colour dot on the People grid. Offered when people are what colour means for
+// this team (see personColoursApply) — in a department that combines its teams, the team's own
+// colour governs instead, so a per-person control there would be a switch wired to nothing.
+// The dashed first swatch puts somebody back on automatic, i.e. their team's colour.
 function memberColorPickerHtml(m){
-  if(!teamIsStandalone(m.teamId)) return '';
+  if(!personColoursApply(m.teamId)) return '';
   const current = barColorFor(m.id, m.teamId);
   const automatic = colorForTeam(m.teamId);
   const isAutomatic = !Number.isInteger(m.colorIndex);
@@ -4166,9 +4167,9 @@ function renderTeamTab(){
   // on whether it sits in a department — and the team one is easy to miss on another tab.
   const colorHint = document.getElementById('people-color-hint');
   if(colorHint){
-    colorHint.textContent = teamIsStandalone(currentTeamId)
-      ? "Colours: click the dot beside a name to give that person their own colour on the schedule."
-      : "Colours: this team is in a department, so every bar here carries the team's colour — that's what tells the teams apart in the Grand views. Change it on Department → Teams.";
+    colorHint.textContent = personColoursApply(currentTeamId)
+      ? "Colours: click the dot beside a name to give that person their own colour on the schedule. The dashed swatch puts them back on the team's colour."
+      : "Colours: this department combines its teams, so every bar carries the team's colour — that is what tells the teams apart in the Grand views. Change it on Department → Teams, or untick \u201cCombine its teams\u2026\u201d for this department if you would rather colour people one by one.";
   }
   const tasks = sortedTasksForDisplay(state.tasks);
   // Keep the "eligible for" filter in step with whatever tasks this team currently has.
@@ -4901,18 +4902,26 @@ function memberColorOverride(memberId){
   if(!m || !Number.isInteger(m.colorIndex)) return null;
   return lightPaletteForPicker()[m.colorIndex] || null;
 }
-// Whether a team stands on its own rather than inside a department — the difference that
-// decides what a colour on the schedule means. Inside a department, colour is what tells the
-// teams apart in the Grand views, and every bar in that team's own grid is the team's colour.
-// Standing alone there are no other teams to tell apart, so the colour is free to mean the
-// person instead, which is the only way colour carries any information on a single-team setup.
-function teamIsStandalone(teamId){
+// What a colour on the schedule means, and it is the department's own setting that decides:
+// "Combine its teams into a Grand Schedule / Requirement / Balance / Registry". With that on,
+// the teams appear side by side in those views and colour is the thing that tells them apart,
+// so the team's colour governs and every bar in one team's grid is that colour. With it off —
+// or with no department at all — nothing ever puts two teams in one grid, so colour is free to
+// mean the person, which is the only way it carries information on a single team's view.
+//
+// Deliberately ignores a team's "Independent" flag: an independent team runs its own rotation
+// but is still shown in the department's Grand views, so it still needs its own colour there.
+function teamSharesGrandViews(teamId){
   const team = state.teams.find(t=>t.id===teamId);
-  return !!team && !team.departmentId;
+  if(!team || !team.departmentId) return false;
+  const dept = state.departments.find(d=>d.id===team.departmentId);
+  return !!(dept && dept.showGrandViews !== false);
 }
-// The colour of one person's bar in their own team's grid.
+function personColoursApply(teamId){ return !teamSharesGrandViews(teamId); }
+// The colour of one person's bar. Their own where people are what colour means here, the
+// team's otherwise — and the team's anyway for anyone left on automatic.
 function barColorFor(memberId, teamId){
-  if(teamIsStandalone(teamId)){
+  if(personColoursApply(teamId)){
     const own = memberColorOverride(memberId);
     if(own) return own;
   }
@@ -7469,9 +7478,8 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
           if(levelHave < levelNeed) levelShortfalls.push(`${level} ${levelHave}/${levelNeed}${g.perTeam.length>1?' ('+team.name+')':''}`);
         });
       }
-      const tc = colorForTeam(team.id);
       assigned.forEach(mid=>{
-        const pColor = tc;
+        const pColor = barColorFor(mid, team.id);
         const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
         const isSick = ((state.holidayReasons[mid]||{})[primaryDate]) === 'sick';
         // Combines candidates across every team in this shared-task group, not just this one
@@ -10232,11 +10240,11 @@ async function renderWhosOnTab(){
       let entries = [];
       g.perTeam.forEach(({team, task})=>{
         const assigned = ((teamData[team.id][dISO]||{})[task.id]) || [];
-        assigned.forEach(mid=> entries.push({ name: shortDisplayName(mid, scopeIds), team }));
+        assigned.forEach(mid=> entries.push({ mid, name: shortDisplayName(mid, scopeIds), team }));
       });
       const cellHtml = entries.length
         ? entries.map(e=>{
-            const c = colorForTeam(e.team.id);
+            const c = barColorFor(e.mid, e.team.id);
             const label = showTeam ? `${e.name} (${e.team.name})` : e.name;
             return `<div class="bar-item"><div class="bar" style="background:${c.bg}; color:${c.fg};">${escHtml(label)}</div></div>`;
           }).join('')
@@ -10500,8 +10508,8 @@ function viewerGrandTaskRowHtml(g, scheds, dates, scopeIds){
     let bars = '';
     g.perTeam.forEach(({team, task})=>{
       const assigned = ((scheds[team.id][primaryDate]||{})[task.id]) || [];
-      const pColor = colorForTeam(team.id);
       assigned.forEach(mid=>{
+        const pColor = barColorFor(mid, team.id);
         const isMe = mid === viewerIdentityId;
         bars += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};" title="${escAttr(team.name)}">
           <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${shortDisplayName(mid, scopeIds)}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
