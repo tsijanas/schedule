@@ -707,6 +707,26 @@
   .spanned-cell{ background:rgba(192,147,42,0.06) !important; }
   .spanned-cell .bar{ justify-content:center; }
 
+  /* Coverage matrix: tasks down, days across, one number per cell — the shape a manager
+     already keeps by hand in a spreadsheet, with the requirement folded in. */
+  .cov-table{ border-collapse:separate; border-spacing:0; width:100%; table-layout:fixed; font-size:13px; }
+  .cov-table th, .cov-table td{ border-bottom:1px solid var(--line); padding:7px 8px; text-align:center; }
+  .cov-table thead th{ background:var(--gold-soft); font-size:11px; text-transform:uppercase; letter-spacing:0.04em; color:var(--ink-soft); font-weight:700; }
+  .cov-table thead th .cov-dnum{ display:block; font-size:10.5px; font-weight:500; text-transform:none; letter-spacing:0; opacity:0.75; }
+  .cov-table th.cov-task, .cov-table td.cov-task{ text-align:left; width:22%; font-weight:600; position:sticky; left:0; background:var(--paper); z-index:2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cov-table thead th.cov-task{ background:var(--gold-soft); z-index:3; }
+  .cov-table td.cov-week, .cov-table th.cov-week{ border-left:2px solid var(--line); font-weight:700; }
+  .cov-table tbody tr:hover td{ background:rgba(255,225,59,0.10); }
+  .cov-table tbody tr:hover td.cov-task{ background:var(--gold-soft); }
+  .cov-cell{ display:inline-flex; align-items:baseline; gap:3px; padding:2px 7px; border-radius:7px; font-variant-numeric:tabular-nums; }
+  .cov-cell .cov-req{ font-size:10.5px; opacity:0.7; }
+  .cov-short{ background:var(--brick-soft); color:var(--brick-text); font-weight:700; }
+  .cov-over{ background:var(--gold-soft); font-weight:600; }
+  .cov-zero{ opacity:0.35; }
+  .cov-bh{ background:repeating-linear-gradient(45deg, rgba(0,70,84,0.05) 0 6px, transparent 6px 12px); }
+  .cov-table tr.cov-total-row td{ border-top:2px solid var(--line); border-bottom:none; font-weight:700; background:var(--paper); }
+  .cov-legend{ display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:12px; font-size:11.5px; color:var(--ink-soft); }
+  .cov-legend span.sw{ display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
   .week-nav{ display:flex; align-items:center; gap:10px; }
   .week-nav button{ background:var(--paper); border:1px solid var(--line); border-radius:8px; width:30px; height:30px; font-size:15px; }
   .week-nav .wk-label{ font-family:'Fraunces',serif; font-weight:600; font-size:16px; min-width:210px; text-align:center; }
@@ -851,6 +871,7 @@
         Team Insights<span class="nav-submenu-arrow">▾</span>
       </button>
       <div class="nav-submenu" id="submenu-team-insights" style="display:none;">
+        <button class="nav-item admin-only" data-tab="coverage">Coverage</button>
         <button class="nav-item admin-only" data-tab="balance">Rotation Balance</button>
       </div>
 
@@ -1101,6 +1122,30 @@
     </div>
 
     <!-- BALANCE TAB -->
+    <!-- COVERAGE TAB -->
+    <div class="tab-panel" id="tab-coverage">
+      <div class="page-head">
+        <h1>Coverage <span class="muted" style="font-weight:400; font-size:14px;" id="cov-team-label"></span></h1>
+        <p>How many people are on each task, day by day, against what the requirement asks for. One week at a time — the same week you see on the Schedule.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="week-nav">
+            <button id="cov-wk-prev">‹</button>
+            <div class="wk-label" id="cov-wk-label"></div>
+            <button id="cov-wk-next">›</button>
+          </div>
+          <div class="spacer"></div>
+          <label class="chip-check" title="Show the requirement beside each number, and tint anything that misses it"><input type="checkbox" id="cov-show-req" checked> vs requirement</label>
+          <button class="btn secondary small" id="btn-cov-copy" title="Copy the table as tab-separated values, ready to paste into a spreadsheet">Copy for spreadsheet</button>
+        </div>
+      </div>
+      <div class="card" id="cov-card">
+        <div id="cov-wrap"></div>
+        <div class="cov-legend" id="cov-legend"></div>
+      </div>
+    </div>
+
     <div class="tab-panel" id="tab-balance">
       <div class="page-head">
         <h1>Rotation balance</h1>
@@ -3659,6 +3704,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='whoson') renderWhosOnTab();
     if(btn.dataset.tab==='schedule') renderScheduleTab();
     if(btn.dataset.tab==='balance') renderBalanceTab();
+    if(btn.dataset.tab==='coverage') renderCoverageTab();
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
     if(btn.dataset.tab==='grand-holidays') renderGrandHolidaysTab();
@@ -8382,6 +8428,124 @@ async function generateWeek(weekMon, opts){
 
   return schedule;
 }
+
+// ================= COVERAGE TAB =================
+// The matrix a manager otherwise keeps by hand: tasks down the side, the week's days across
+// the top, and the number of people on each task each day — with the requirement folded in so
+// a gap is visible without cross-referencing the Schedule. Reads the same saved week the
+// Schedule tab reads; nothing here writes anything.
+let coverageWeekMonday = null;
+function coverageShowReq(){ return !!document.getElementById('cov-show-req')?.checked; }
+// One row per task, one entry per day: what the requirement asks, and who is actually on it.
+// Bank holidays are treated exactly as the Schedule grid treats them — the requirement for
+// that day is zero, so a day nobody works isn't reported as a shortfall.
+function coverageRows(sched, dates){
+  return sortedTasksForDisplay(state.tasks).map(task=>{
+    const days = dates.map((dISO, i)=>{
+      const bh = isBankHoliday(dISO);
+      const need = bh ? 0 : ((state.req[task.id]||{})[DAYS[i]] || 0);
+      const assigned = ((sched[dISO]||{})[task.id] || []).length;
+      return { dISO, need, assigned, bh };
+    });
+    return { task, days,
+      weekAssigned: days.reduce((s,d)=> s+d.assigned, 0),
+      weekNeed: days.reduce((s,d)=> s+d.need, 0) };
+  });
+}
+function coverageCellHtml(d){
+  const showReq = coverageShowReq();
+  const short = showReq && d.assigned < d.need;
+  const over = showReq && d.need > 0 && d.assigned > d.need;
+  const cls = short ? 'cov-short' : over ? 'cov-over' : (d.assigned===0 ? 'cov-zero' : '');
+  const reqPart = showReq && (d.need>0 || d.assigned>0) ? `<span class="cov-req">/${d.need}</span>` : '';
+  const title = d.bh ? 'Bank holiday — the requirement is zero for this day'
+    : short ? `${d.need - d.assigned} short of the requirement`
+    : over ? `${d.assigned - d.need} more than the requirement asks for`
+    : `${d.assigned} assigned, requirement ${d.need}`;
+  return `<td class="${d.bh?'cov-bh':''}" title="${escAttr(title)}"><span class="cov-cell ${cls}">${d.assigned}${reqPart}</span></td>`;
+}
+async function renderCoverageTab(){
+  if(!coverageWeekMonday) coverageWeekMonday = new Date(currentWeekMonday);
+  const label = document.getElementById('cov-team-label');
+  if(label){ const t = currentTeam(); label.textContent = t ? `— ${t.name}` : ''; }
+  document.getElementById('cov-wk-label').textContent = fmtWeek(coverageWeekMonday);
+  const wrap = document.getElementById('cov-wrap');
+  wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
+  const dates = DAYS.map((d,i)=> iso(addDays(coverageWeekMonday,i)));
+  const sched = await loadWeekForTeam(currentTeamId, iso(coverageWeekMonday));
+  const rows = coverageRows(sched, dates);
+  if(rows.length===0){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">This team has no tasks yet — add some under Team → Tasks.</div>`;
+    document.getElementById('cov-legend').innerHTML = '';
+    return;
+  }
+  let html = `<div class="people-table-scroll"><table class="cov-table"><thead><tr><th class="cov-task">Task</th>`;
+  dates.forEach((dISO,i)=>{
+    const dt = addDays(coverageWeekMonday,i);
+    const bh = bankHolidayName(dISO);
+    html += `<th title="${escAttr(bh||'')}">${DAY_LABELS[DAYS[i]].slice(0,3)}<span class="cov-dnum">${dt.getDate()}${bh?' •':''}</span></th>`;
+  });
+  html += `<th class="cov-week">Week</th></tr></thead><tbody>`;
+  rows.forEach(r=>{
+    html += `<tr><td class="cov-task" title="${escAttr(r.task.name)}">${escHtml(r.task.name)}</td>`;
+    r.days.forEach(d=> html += coverageCellHtml(d));
+    const weekShort = coverageShowReq() && r.weekAssigned < r.weekNeed;
+    html += `<td class="cov-week"><span class="cov-cell ${weekShort?'cov-short':(r.weekAssigned===0?'cov-zero':'')}">${r.weekAssigned}${coverageShowReq()?`<span class="cov-req">/${r.weekNeed}</span>`:''}</span></td></tr>`;
+  });
+  // Column totals, the way the hand-kept version has them: how many person-days the whole
+  // team is carrying that day, against how many the requirement asks for.
+  const totals = dates.map((_,i)=> rows.reduce((s,r)=> s + r.days[i].assigned, 0));
+  const totalNeeds = dates.map((_,i)=> rows.reduce((s,r)=> s + r.days[i].need, 0));
+  html += `<tr class="cov-total-row"><td class="cov-task">Total</td>`;
+  totals.forEach((v,i)=>{
+    const short = coverageShowReq() && v < totalNeeds[i];
+    html += `<td><span class="cov-cell ${short?'cov-short':''}">${v}${coverageShowReq()?`<span class="cov-req">/${totalNeeds[i]}</span>`:''}</span></td>`;
+  });
+  const wk = totals.reduce((s,v)=>s+v,0), wkNeed = totalNeeds.reduce((s,v)=>s+v,0);
+  html += `<td class="cov-week"><span class="cov-cell ${coverageShowReq()&&wk<wkNeed?'cov-short':''}">${wk}${coverageShowReq()?`<span class="cov-req">/${wkNeed}</span>`:''}</span></td></tr>`;
+  html += `</tbody></table></div>`;
+  wrap.innerHTML = html;
+  const people = availabilityByDay(teamMembers(), coverageWeekMonday);
+  document.getElementById('cov-legend').innerHTML = coverageShowReq()
+    ? `<span><span class="sw" style="background:var(--brick-soft);"></span>short of the requirement</span>
+       <span><span class="sw" style="background:var(--gold-soft);"></span>more than asked for</span>
+       <span>Each cell is <strong>people assigned</strong> / <strong>requirement</strong>. Week is the sum of the days (person-days).</span>
+       <span class="muted">${people.scheduleableCount} schedulable ${people.scheduleableCount===1?'person':'people'} on this team.</span>`
+    : `<span>Each cell is how many people are on that task that day. Week is the sum of the days (person-days).</span>`;
+}
+// Tab-separated, because the thing this replaces is a spreadsheet — paste straight into one.
+function coverageTsv(rows, dates){
+  const head = ['Task', ...dates, 'Week'].join('\t');
+  const body = rows.map(r=> [r.task.name, ...r.days.map(d=> coverageShowReq()? `${d.assigned}/${d.need}` : d.assigned), coverageShowReq()? `${r.weekAssigned}/${r.weekNeed}` : r.weekAssigned].join('\t'));
+  const totals = ['TOTAL', ...dates.map((_,i)=>{
+    const a = rows.reduce((s,r)=> s+r.days[i].assigned, 0);
+    const n = rows.reduce((s,r)=> s+r.days[i].need, 0);
+    return coverageShowReq()? `${a}/${n}` : a;
+  }), coverageShowReq()
+      ? `${rows.reduce((s,r)=>s+r.weekAssigned,0)}/${rows.reduce((s,r)=>s+r.weekNeed,0)}`
+      : rows.reduce((s,r)=>s+r.weekAssigned,0)].join('\t');
+  return [head, ...body, totals].join('\n');
+}
+document.getElementById('cov-wk-prev').addEventListener('click', ()=>{ coverageWeekMonday = addDays(coverageWeekMonday,-7); renderCoverageTab(); });
+document.getElementById('cov-wk-next').addEventListener('click', ()=>{ coverageWeekMonday = addDays(coverageWeekMonday,7); renderCoverageTab(); });
+document.getElementById('cov-show-req').addEventListener('change', ()=> renderCoverageTab());
+document.getElementById('btn-cov-copy').addEventListener('click', async ()=>{
+  const dates = DAYS.map((d,i)=> iso(addDays(coverageWeekMonday,i)));
+  const sched = await loadWeekForTeam(currentTeamId, iso(coverageWeekMonday));
+  const tsv = coverageTsv(coverageRows(sched, dates), dates);
+  try{
+    await navigator.clipboard.writeText(tsv);
+    showToast('Copied — paste it into a spreadsheet');
+  }catch(e){
+    // Clipboard access can be refused (permissions, an insecure origin); a textarea the person
+    // can copy from by hand beats a button that silently does nothing.
+    const wrap = document.getElementById('cov-wrap');
+    const ta = document.createElement('textarea');
+    ta.value = tsv; ta.style.cssText = 'width:100%; height:130px; margin-top:12px; font-family:monospace; font-size:11.5px;';
+    wrap.appendChild(ta); ta.select();
+    showToast("Couldn't reach the clipboard — copy it from the box below");
+  }
+});
 
 // ================= SCHEDULE TAB =================
 async function renderScheduleTab(){
