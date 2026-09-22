@@ -358,6 +358,23 @@
   .audit-log-who{ font-weight:700; width:100px; flex-shrink:0; }
   .audit-log-action{ font-weight:600; }
   .audit-log-detail{ font-size:11.5px; }
+  /* Schedule history: a day heading, then a line per change with the detail folded away. */
+  .hist-day{ font-family:'Fraunces',serif; font-weight:600; font-size:13px; color:var(--ink-soft);
+    margin:18px 0 6px; padding-bottom:5px; border-bottom:1px solid var(--line); }
+  .hist-day:first-child{ margin-top:0; }
+  .hist-row{ display:flex; gap:12px; padding:8px 2px; align-items:baseline; }
+  .hist-row + .hist-row{ border-top:1px solid var(--line); }
+  .hist-when{ flex:0 0 62px; color:var(--ink-faint); font-size:11px; }
+  .hist-body{ flex:1; min-width:0; }
+  .hist-head{ font-size:12.5px; line-height:1.55; }
+  .hist-counted{ color:var(--ink-faint); font-size:11px; }
+  .hist-meta{ color:var(--ink-soft); font-size:11px; margin-top:1px; }
+  .hist-detail{ margin-top:5px; }
+  .hist-detail summary{ cursor:pointer; font-size:11.5px; color:var(--ink-soft); }
+  .hist-detail summary:hover{ color:var(--ink); }
+  .hist-change{ font-size:11.5px; padding:3px 0 3px 10px; margin-top:2px; border-left:2px solid var(--line); }
+  .hist-change-off{ border-left-color:var(--brick); }
+  .hist-change-on{ border-left-color:var(--sage); }
   td:hover .add-select{ opacity:1; }
   .add-select select, .add-select .fsel-trigger{
     font-size:14px; padding:2px; width:26px; height:26px; border:1.5px dashed var(--ink-faint); border-radius:50%;
@@ -879,6 +896,7 @@
       </button>
       <div class="nav-submenu" id="submenu-dept-insights" style="display:none;">
         <button class="nav-item admin-only" data-tab="grand-coverage" id="nav-grand-coverage">Coverage</button>
+        <button class="nav-item admin-only" data-tab="grand-history" id="nav-grand-history">Schedule history</button>
         <button class="nav-item admin-only" data-tab="grand-balance" id="nav-grand-balance">Rotation Balance</button>
         <button class="nav-item admin-only" data-tab="grand-registry" id="nav-grand-registry">Registry</button>
       </div>
@@ -896,6 +914,7 @@
       </button>
       <div class="nav-submenu" id="submenu-team-insights" style="display:none;">
         <button class="nav-item admin-only" data-tab="coverage" id="nav-coverage">Coverage</button>
+        <button class="nav-item admin-only" data-tab="history" id="nav-history">Schedule history</button>
         <button class="nav-item admin-only" data-tab="balance">Rotation Balance</button>
       </div>
 
@@ -1225,6 +1244,50 @@
         <p>How many times each person has worked each task, all time. Each task is only compared across the people actually eligible for it, so an IC3-only task is judged only against IC3s.</p>
       </div>
       <div id="balance-list"></div>
+    </div>
+
+    <!-- SCHEDULE HISTORY. One per level, same rule as Coverage: a department that combines its
+         teams reads it department-wide, one that doesn't reads it per team. -->
+    <div class="tab-panel" id="tab-history">
+      <div class="page-head">
+        <h1>Schedule history <span class="muted" style="font-weight:400; font-size:14px;" id="hist-team-label"></span></h1>
+        <p>Every change this team's schedule has been through, newest first — who made it, what changed, and which week it was for.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <input type="search" id="hist-search" placeholder="Filter by person, task or who" style="flex:0 1 300px; min-width:180px;">
+          <div class="spacer"></div>
+          <div class="muted" style="font-size:12px;" id="hist-count"></div>
+          <button class="btn secondary small" id="btn-hist-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="card">
+        <div id="hist-wrap"></div>
+        <div class="row" style="margin-top:14px;">
+          <button class="btn secondary small" id="btn-hist-more">Load older</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-grand-history">
+      <div class="page-head">
+        <h1>Schedule history <span class="muted" style="font-weight:400; font-size:14px;" id="ghist-dept-name"></span></h1>
+        <p>Every change made to any team's schedule in this department, newest first — whether it was made on that team's own Schedule tab or department-wide from here.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <input type="search" id="ghist-search" placeholder="Filter by person, task, team or who" style="flex:0 1 330px; min-width:180px;">
+          <div class="spacer"></div>
+          <div class="muted" style="font-size:12px;" id="ghist-count"></div>
+          <button class="btn secondary small" id="btn-ghist-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="card">
+        <div id="ghist-wrap"></div>
+        <div class="row" style="margin-top:14px;">
+          <button class="btn secondary small" id="btn-ghist-more">Load older</button>
+        </div>
+      </div>
     </div>
 
     <!-- HOLIDAYS TAB -->
@@ -2733,17 +2796,107 @@ async function logAudit(action, details){
   try{
     const { db, doc, setDoc } = window.rotaDb;
     const id = 'log_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+    // The team an entry belongs to is whichever one the action was actually against — which
+    // isn't always the selected one, since department-wide actions borrow each team's context
+    // in turn. Its department is stored alongside it so a department's own history can be
+    // read back without having to know which teams were in it at the time.
+    const teamId = (details && details.teamId) || currentTeamId || null;
+    const team = state.teams.find(t=>t.id===teamId);
     await setDoc(doc(db, 'audit_log', id), {
       ts: Date.now(),
       actorUid: currentAuthUid || null,
       actorName: (viewerIdentityId && memberName(viewerIdentityId)) || 'Unknown', // same name
       // the rest of the app shows, so the log doesn't read "Unknown" for someone whose record
       // is still on an email-derived name
-      teamId: currentTeamId || null,
+      teamId,
+      deptId: (team && team.departmentId) || currentDepartmentId || null,
       action,
       details: details || {}
     });
   }catch(e){ console.warn('Could not write audit log entry (non-fatal)', e); }
+}
+
+// ---- Schedule history ----
+// Who changed the schedule, and what changed. Every edit is recorded from saveWeek — the one
+// place a week is ever written — by diffing what was saved against what was there. That's why
+// this covers every route to a change, whether it's a name clicked off a cell, a Generate, an
+// out-of-office cover, or something added to the app later: none of them has to remember to
+// write a history entry.
+// What was there has to be kept separately: callers edit the week in place, and the cache
+// loadWeek hands out is the very object they mutate, so by the time a save happens the
+// original is already gone from it.
+const savedWeekShadow = new Map();  // 'teamId|weekISO' -> a copy of what the last save put there
+const SAVED_WEEK_SHADOW_MAX = 150;  // a session that walks through a year of weeks shouldn't grow forever
+function rememberWeekShadow(teamId, weekISO, sched){
+  const k = teamId+'|'+weekISO;
+  try{
+    savedWeekShadow.delete(k); // re-inserting moves it to the end, so eviction drops the least recent
+    savedWeekShadow.set(k, JSON.parse(JSON.stringify(sched||{})));
+    while(savedWeekShadow.size > SAVED_WEEK_SHADOW_MAX) savedWeekShadow.delete(savedWeekShadow.keys().next().value);
+  }catch(e){}
+}
+// A week as a flat set of "this person, this task, this day" facts — which makes the
+// difference between two versions of a week a plain set difference.
+function weekAssignmentSet(sched){
+  const out = new Set();
+  Object.keys(sched||{}).forEach(dateISO=>{
+    const day = sched[dateISO] || {};
+    Object.keys(day).forEach(taskId=> (day[taskId]||[]).forEach(mid=> out.add(taskId+'\u0001'+dateISO+'\u0001'+mid)));
+  });
+  return out;
+}
+// Names, not ids: an entry has to still read correctly years later, when the task may have
+// been renamed and the person may have left and be gone from the roster entirely.
+const SCHEDULE_HISTORY_MAX_ITEMS = 60;
+function scheduleChangeItems(before, after, teamId){
+  const b = weekAssignmentSet(before), a = weekAssignmentSet(after);
+  const tasks = state.tasksByTeam[teamId] || [];
+  const item = k=>{
+    const [taskId, dateISO, mid] = k.split('\u0001');
+    return { p: memberName(mid) || 'Someone', t: (tasks.find(x=>x.id===taskId)||{}).name || taskId, d: dateISO };
+  };
+  return {
+    added: [...a].filter(k=>!b.has(k)).map(item),
+    removed: [...b].filter(k=>!a.has(k)).map(item),
+  };
+}
+function logScheduleEdit(teamId, weekISO, before, after, op){
+  const { added, removed } = scheduleChangeItems(before, after, teamId);
+  if(added.length===0 && removed.length===0) return; // a save that changed nothing isn't history
+  const team = state.teams.find(t=>t.id===teamId);
+  logAudit('schedule.edit', {
+    op: op || 'edit',
+    teamId, teamName: (team && team.name) || '',
+    week: weekISO,
+    addedCount: added.length, removedCount: removed.length,
+    // Bulk operations run into the hundreds of changes; the count is the story there, so the
+    // list is capped and the view says how many it isn't showing.
+    added: added.slice(0, SCHEDULE_HISTORY_MAX_ITEMS),
+    removed: removed.slice(0, SCHEDULE_HISTORY_MAX_ITEMS),
+  });
+}
+// Rearranging the rows changes the schedule everyone reads, so it belongs in the same history.
+// Exactly one row moves per action, which is the one whose position shifted furthest.
+function movedIdBetween(before, after){
+  let moved = null, furthest = 0;
+  after.forEach((id,i)=>{
+    const was = before.indexOf(id);
+    if(was < 0) return;
+    if(Math.abs(i-was) > furthest){ furthest = Math.abs(i-was); moved = id; }
+  });
+  return moved;
+}
+function logTaskOrderChange(scope, teamId, before, after, nameOf){
+  const moved = movedIdBetween(before, after);
+  if(!moved) return;
+  const team = state.teams.find(t=>t.id===teamId);
+  logAudit('schedule.layout', {
+    scope, teamId, teamName: (team && team.name) || '',
+    task: nameOf(moved) || moved,
+    from: before.indexOf(moved) + 1,
+    to: after.indexOf(moved) + 1,
+    of: after.length,
+  });
 }
 async function renderAuditLog(){
   const wrap = document.getElementById('audit-log-wrap');
@@ -2758,13 +2911,18 @@ async function renderAuditLog(){
       'member.save':'Edited a person', 'member.remove':'Removed a person', 'member.assign_team':'Assigned to a team',
       'member.approve':'Approved a signup', 'signup.reject':'Dismissed a signup request',
       'team.remove':'Removed a team', 'team.save_all':'Saved team list',
-      'task.save':'Edited a task', 'task.remove':'Removed a task'
+      'task.save':'Edited a task', 'task.remove':'Removed a task',
+      'schedule.edit':'Changed the schedule', 'schedule.layout':'Reordered the schedule'
     };
     let html = '<div class="audit-log-list">';
     entries.forEach(e=>{
       const when = new Date(e.ts).toLocaleString();
       const label = ACTION_LABELS[e.action] || e.action;
-      const detailBits = Object.entries(e.details||{}).filter(([k,v])=>v!==undefined && v!=='' && v!==null).map(([k,v])=>`${k}: ${Array.isArray(v)?v.join('/'):v}`).join(', ');
+      // The schedule entries carry the whole list of what changed, which belongs on the
+      // Schedule history tab, not squeezed into one line here — so they're summarised.
+      const detailBits = Object.entries(e.details||{})
+        .filter(([k,v])=> v!==undefined && v!=='' && v!==null && k!=='added' && k!=='removed')
+        .map(([k,v])=>`${k}: ${Array.isArray(v)?v.join('/'):v}`).join(', ');
       html += `<div class="audit-log-row">
         <span class="audit-log-when mono">${escHtml(when)}</span>
         <span class="audit-log-who">${escHtml(e.actorName||'Unknown')}</span>
@@ -3645,6 +3803,7 @@ async function loadWeek(weekISO){
   let sched = {};
   try{ const r = await window.storage.get('schedule_'+currentTeamId+'_'+weekISO, true); if(r) sched = JSON.parse(r.value); }catch(e){}
   state.schedules[weekISO] = sched;
+  rememberWeekShadow(currentTeamId, weekISO, sched); // what any later edit will be compared against
   return sched;
 }
 async function persistPendingNotifyWeeks(){
@@ -3809,9 +3968,19 @@ async function sendNotificationsForDepartment(deptId){
   return { sent: totalSent, weeks: totalWeeks, teams: teams.length };
 }
 async function saveWeek(weekISO, sched, opts){
+  // Read against the team this save is actually for, before anything else can move on: a
+  // department-wide action saves one team after another, each inside its own borrowed context.
+  const teamId = currentTeamId;
+  const before = savedWeekShadow.get(teamId+'|'+weekISO) || {};
   state.schedules[weekISO] = sched; // in-memory always succeeds
-  const ok = await safeSet('schedule_'+currentTeamId+'_'+weekISO, sched, true);
-  if(ok && !(opts && opts.skipDirtyTracking)) await markWeekDirtyForNotify(currentTeamId, weekISO);
+  const ok = await safeSet('schedule_'+teamId+'_'+weekISO, sched, true);
+  if(ok){
+    // Recorded only once it's really stored, and never awaited — the history is a record of
+    // the edit, never a step the edit has to wait for or can be held up by.
+    logScheduleEdit(teamId, weekISO, before, sched, opts && opts.op);
+    rememberWeekShadow(teamId, weekISO, sched);
+  }
+  if(ok && !(opts && opts.skipDirtyTracking)) await markWeekDirtyForNotify(teamId, weekISO);
   return ok;
 }
 function updateStorageBanner(){
@@ -3903,6 +4072,8 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='balance') renderBalanceTab();
     if(btn.dataset.tab==='coverage') renderCoverageTab();
     if(btn.dataset.tab==='grand-coverage') renderGrandCoverageTab();
+    if(btn.dataset.tab==='history') renderHistoryTab('team');
+    if(btn.dataset.tab==='grand-history') renderHistoryTab('dept');
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
     if(btn.dataset.tab==='grand-holidays') renderGrandHolidaysTab();
@@ -5424,6 +5595,14 @@ async function switchTeam(teamId){
   await renderScheduleTab();
   await renderBalanceTab();
   renderHolidaysTab();
+  // Coverage and Schedule history aren't rebuilt above because they're only rendered when
+  // opened — but if one of them is the tab currently on screen, it would otherwise sit there
+  // showing the team that was selected a moment ago.
+  const openTab = document.querySelector('.nav-item.active')?.dataset.tab;
+  if(openTab==='coverage') renderCoverageTab();
+  if(openTab==='grand-coverage') renderGrandCoverageTab();
+  if(openTab==='history') renderHistoryTab('team');
+  if(openTab==='grand-history') renderHistoryTab('dept');
 }
 
 // ================= TEAMS & PEOPLE TAB =================
@@ -6142,21 +6321,25 @@ function renderReqEffectNote(){
   if(!el) return;
   const weekISO = iso(reqWeekMonday);
   const inForce = versionInForce(state.reqVersionsByTeam[currentTeamId], weekISO);
-  const since = (inForce.from && inForce.from !== REQ_EPOCH) ? fmtShortDate(inForce.from) : null;
+  const since = (inForce.from && inForce.from !== REQ_EPOCH) ? fmtReqDate(inForce.from) : null;
   const changes = reqChangeDates(currentTeamId);
   const changeLine = changes.length
-    ? ` <span class="muted">Changed on: ${changes.map(fmtShortDate).join(' · ')}.</span>`
+    ? ` <span class="muted">Changed on: ${changes.map(fmtReqDate).join(' · ')}.</span>`
     : '';
   const saveBtn = document.getElementById('btn-save-req');
   if(reqWeekIsPast()){
     el.innerHTML = `This week has already been and gone, so its numbers are kept as they were${since?` (set ${escHtml(since)})`:''} — open this week or a later one to change the requirement.${changeLine}`;
     if(saveBtn){ saveBtn.disabled = true; saveBtn.title = 'Past weeks keep the numbers they ran with'; }
   } else {
-    el.innerHTML = `These numbers apply <strong>from ${escHtml(fmtShortDate(weekISO))} onwards</strong>${since?`, and have been in force since ${escHtml(since)}`:''}. Saving changes this week and every week after it; earlier weeks keep what they ran with.${changeLine}`;
+    el.innerHTML = `These numbers apply <strong>from ${escHtml(fmtReqDate(weekISO))} onwards</strong>${since?`, and have been in force since ${escHtml(since)}`:''}. Saving changes this week and every week after it; earlier weeks keep what they ran with.${changeLine}`;
     if(saveBtn){ saveBtn.disabled = false; saveBtn.title = ''; }
   }
 }
-function fmtShortDate(dISO){
+// Dates for "applies from ... onwards": no weekday, since a requirement's start is a week, not
+// a day. Deliberately its own function — an earlier version of this was called fmtShortDate,
+// which silently replaced the notification texts' own same-named helper and dropped the
+// weekday out of every "you're on X on Wed, Sep 24" message.
+function fmtReqDate(dISO){
   const d = new Date(dISO+'T00:00:00');
   return isNaN(d) ? dISO : d.toLocaleDateString('en-US', { month:'short', day:'numeric', year: d.getFullYear()!==new Date().getFullYear() ? 'numeric' : undefined });
 }
@@ -6492,7 +6675,7 @@ document.getElementById('btn-save-req').addEventListener('click', async ()=>{
   const weekISO = iso(reqWeekMonday);
   setReqVersion(currentTeamId, weekISO, newReq, newReqLevels);
   const ok = await saveTeamReq(currentTeamId, { loud:true });
-  if(ok) showToast(`Requirement saved — applies from ${fmtShortDate(weekISO)} onwards`);
+  if(ok) showToast(`Requirement saved — applies from ${fmtReqDate(weekISO)} onwards`);
   renderReqTab();
 });
 document.getElementById('greq-wk-prev').addEventListener('click', ()=>{ grandReqWeekMonday = addDays(grandReqWeekMonday,-7); renderGrandReqTab(); });
@@ -6573,11 +6756,11 @@ function renderGreqEffectNote(){
   if(!el) return;
   const weekISO = iso(grandReqWeekMonday);
   const changes = (sortReqVersions(state.grandReqVersions[currentDepartmentId])||[]).map(v=>v.from).filter(d=>d && d!==REQ_EPOCH);
-  const changeLine = changes.length ? ` <span class="muted">Changed on: ${changes.map(fmtShortDate).join(' · ')}.</span>` : '';
+  const changeLine = changes.length ? ` <span class="muted">Changed on: ${changes.map(fmtReqDate).join(' · ')}.</span>` : '';
   if(greqWeekIsPast()){
     el.innerHTML = `This week has already run, so its numbers — and the split that went to each team — are kept as they were. Open this week or a later one to change the requirement.${changeLine}`;
   } else {
-    el.innerHTML = `These numbers apply <strong>from ${escHtml(fmtShortDate(weekISO))} onwards</strong> for every team that follows the department. Editing them changes this week and every week after it.${changeLine}`;
+    el.innerHTML = `These numbers apply <strong>from ${escHtml(fmtReqDate(weekISO))} onwards</strong> for every team that follows the department. Editing them changes this week and every week after it.${changeLine}`;
   }
 }
 async function renderGrandReqTab(){
@@ -6856,7 +7039,7 @@ document.getElementById('btn-apply-grand-req').addEventListener('click', async (
     showToast('That week has already run — its numbers, and the split each team got, are kept as they were. Open this week or a later one.');
     return;
   }
-  askConfirm(`Re-apply the grand requirement to every team's own Weekly Needs, from ${fmtShortDate(iso(grandReqWeekMonday || mondayOf(new Date())))} onwards? This overwrites each matching task's numbers on every team that follows grand — teams with "Override" ticked for a task keep their own numbers for it. Tasks with a level breakdown set here push their own per-level minimums instead of a plain total, split by how many of each level each team actually has.`, 'Apply', async ()=>{
+  askConfirm(`Re-apply the grand requirement to every team's own Weekly Needs, from ${fmtReqDate(iso(grandReqWeekMonday || mondayOf(new Date())))} onwards? This overwrites each matching task's numbers on every team that follows grand — teams with "Override" ticked for a task keep their own numbers for it. Tasks with a level breakdown set here push their own per-level minimums instead of a plain total, split by how many of each level each team actually has.`, 'Apply', async ()=>{
     await applyGrandRequirementToTeams({ silent:false });
     renderReqTab();
   });
@@ -7185,7 +7368,7 @@ document.getElementById('btn-grand-generate').addEventListener('click', ()=>{
           balanceCache = null;
           const sched = await generateWeek(grandWeekMonday, { excludeTaskNames });
           currentSchedule = sched;
-          await saveWeek(iso(currentWeekMonday), sched);
+          await saveWeek(iso(currentWeekMonday), sched, { op:'generate' });
         });
       }
 
@@ -7207,7 +7390,7 @@ document.getElementById('btn-grand-generate').addEventListener('click', ()=>{
         for(const team of teams){
           await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
             currentSchedule = teamSchedules[team.id];
-            await saveWeek(iso(currentWeekMonday), currentSchedule);
+            await saveWeek(iso(currentWeekMonday), currentSchedule, { op:'generate-shared' });
           });
         }
       }
@@ -7219,7 +7402,7 @@ document.getElementById('btn-grand-generate').addEventListener('click', ()=>{
         for(const team of teams){
           await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
             currentSchedule = snapshots[team.id] || {};
-            await saveWeek(weekISO, currentSchedule);
+            await saveWeek(weekISO, currentSchedule, { op:'undo' });
           });
         }
         balanceCache = null;
@@ -7250,7 +7433,7 @@ document.getElementById('btn-grand-fill-in').addEventListener('click', ()=>{
           balanceCache = null;
           const sched = await generateWeek(grandWeekMonday, { mode:'fill', keepSchedule: snapshots[team.id] });
           currentSchedule = sched;
-          await saveWeek(iso(currentWeekMonday), sched);
+          await saveWeek(iso(currentWeekMonday), sched, { op:'fill' });
         });
       }
       statusEl.textContent = '';
@@ -7260,7 +7443,7 @@ document.getElementById('btn-grand-fill-in').addEventListener('click', ()=>{
         for(const team of teams){
           await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
             currentSchedule = snapshots[team.id] || {};
-            await saveWeek(weekISO, currentSchedule);
+            await saveWeek(weekISO, currentSchedule, { op:'undo' });
           });
         }
         balanceCache = null;
@@ -7291,7 +7474,7 @@ document.getElementById('btn-grand-update-sched').addEventListener('click', ()=>
           balanceCache = null;
           const sched = await generateWeek(grandWeekMonday, { mode:'update', keepSchedule: snapshots[team.id] });
           currentSchedule = sched;
-          await saveWeek(iso(currentWeekMonday), sched);
+          await saveWeek(iso(currentWeekMonday), sched, { op:'update' });
         });
       }
       statusEl.textContent = '';
@@ -7301,7 +7484,7 @@ document.getElementById('btn-grand-update-sched').addEventListener('click', ()=>
         for(const team of teams){
           await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
             currentSchedule = snapshots[team.id] || {};
-            await saveWeek(weekISO, currentSchedule);
+            await saveWeek(weekISO, currentSchedule, { op:'undo' });
           });
         }
         balanceCache = null;
@@ -7743,7 +7926,7 @@ document.getElementById('btn-grand-clear').addEventListener('click', ()=>{
         await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
           snapshots[team.id] = JSON.parse(JSON.stringify(currentSchedule));
           currentSchedule = {};
-          await saveWeek(weekISO, {});
+          await saveWeek(weekISO, {}, { op:'clear' });
         });
       }
       statusEl.textContent = '';
@@ -7754,7 +7937,7 @@ document.getElementById('btn-grand-clear').addEventListener('click', ()=>{
         for(const team of teams){
           await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
             currentSchedule = snapshots[team.id] || {};
-            await saveWeek(weekISO, currentSchedule);
+            await saveWeek(weekISO, currentSchedule, { op:'undo' });
           });
         }
         balanceCache = null;
@@ -7818,7 +8001,9 @@ async function readWithBorrowedTeamContext(teamId, weekMonday, fn, preloadedSche
 async function loadWeekForTeam(teamId, weekISO){
   try{
     const r = await window.storage.get('schedule_'+teamId+'_'+weekISO, true);
-    return r ? JSON.parse(r.value) : {};
+    const sched = r ? JSON.parse(r.value) : {};
+    rememberWeekShadow(teamId, weekISO, sched); // what any later edit will be compared against
+    return sched;
   }catch(e){ return {}; }
 }
 // Builds just one task-name group's <tr> — used both for the initial full render and for
@@ -8237,6 +8422,7 @@ function sortedTasksForDisplay(tasks){
 // in the list keeps its relative place at the end, so this is safe to call with a partial list.
 async function applyTaskOrder(teamId, orderedIds){
   const tasks = state.tasksByTeam[teamId] || [];
+  const previous = sortedTasksForDisplay(tasks).map(t=>t.id); // read before the new one is written
   const seen = new Set();
   orderedIds.forEach((id, i)=>{
     const t = tasks.find(x=>x.id===id);
@@ -8246,6 +8432,7 @@ async function applyTaskOrder(teamId, orderedIds){
   sortedTasksForDisplay(tasks).forEach(t=>{ if(!seen.has(t.id)) t.order = next++; });
   const ok = await safeSet('tasks_'+teamId, tasks, true);
   if(!ok) showToast("Couldn't save the new order — it'll go back to where it was on the next load");
+  else logTaskOrderChange('team', teamId, previous, orderedIds, id=> (tasks.find(t=>t.id===id)||{}).name);
   return ok;
 }
 // Drag ended on another row, or an arrow was clicked: move one task to where another sits.
@@ -8372,6 +8559,7 @@ function sortedGrandGroupKeys(groups){
 }
 async function applyGrandTaskOrder(deptId, orderedKeys){
   const groups = grandTaskGroups(deptId);
+  const previousKeys = sortedGrandGroupKeys(groups); // read before the new one is written
   const posById = {}; // the department-wide position, so no two teams can disagree about it
   const touched = new Set();
   orderedKeys.forEach((key, i)=>{
@@ -8391,6 +8579,8 @@ async function applyGrandTaskOrder(deptId, orderedKeys){
     if(!await safeSet('tasks_'+teamId, tasks, true)) ok = false;
   }
   if(!ok) showToast("Couldn't save the new order — it'll go back to where it was on the next load");
+  else logTaskOrderChange('department', [...touched][0] || null, previousKeys, orderedKeys,
+                          key=> (groups[key]||{}).displayName);
   return ok;
 }
 function levelAllowed(task, memberLevels){
@@ -9094,16 +9284,22 @@ async function renderGrandCoverageTab(){
 // Only one of the two is ever on offer: the department-wide one where the teams are combined,
 // the team one where they aren't. Called from renderTeamSwitcher, which already runs whenever
 // the team, department or that setting changes.
+// Coverage and Schedule history each exist at both levels, and only one of the two applies:
+// a department that combines its teams reads them department-wide, a department that doesn't
+// reads them per team. Same switch decides both.
 function syncCoverageNavVisibility(){
   const grandCombines = teamSharesGrandViews(currentTeamId);
-  const teamItem = document.getElementById('nav-coverage');
-  const deptItem = document.getElementById('nav-grand-coverage');
-  if(teamItem) teamItem.style.display = grandCombines ? 'none' : '';
-  if(deptItem) deptItem.style.display = grandCombines ? '' : 'none';
-  // If the hidden one happens to be the open tab, move to the one that applies.
   const active = document.querySelector('.nav-item.active');
-  if(active && active.dataset.tab==='coverage' && grandCombines && deptItem) deptItem.click();
-  if(active && active.dataset.tab==='grand-coverage' && !grandCombines && teamItem) teamItem.click();
+  [['nav-coverage','coverage','nav-grand-coverage','grand-coverage'],
+   ['nav-history','history','nav-grand-history','grand-history']].forEach(([teamId, teamTab, deptId, deptTab])=>{
+    const teamItem = document.getElementById(teamId);
+    const deptItem = document.getElementById(deptId);
+    if(teamItem) teamItem.style.display = grandCombines ? 'none' : '';
+    if(deptItem) deptItem.style.display = grandCombines ? '' : 'none';
+    // If the hidden one happens to be the open tab, move to the one that applies.
+    if(active && active.dataset.tab===teamTab && grandCombines && deptItem) deptItem.click();
+    if(active && active.dataset.tab===deptTab && !grandCombines && teamItem) teamItem.click();
+  });
 }
 document.getElementById('cov-wk-prev').addEventListener('click', ()=>{ coverageWeekMonday = addDays(coverageWeekMonday,-7); renderCoverageTab(); });
 document.getElementById('cov-wk-next').addEventListener('click', ()=>{ coverageWeekMonday = addDays(coverageWeekMonday,7); renderCoverageTab(); });
@@ -9133,6 +9329,246 @@ async function copyCoverage(scope){
 }
 document.getElementById('btn-cov-copy').addEventListener('click', ()=> copyCoverage('team'));
 document.getElementById('btn-gcov-copy').addEventListener('click', ()=> copyCoverage('dept'));
+
+// ================= SCHEDULE HISTORY TAB =================
+// Reads back what saveWeek and the reordering recorded. The log itself is org-wide and
+// append-only, so this pages through it newest-first and keeps the entries belonging to the
+// teams in scope — one team, or every team in the department.
+const HISTORY_PAGE_SIZE = 200;
+const historyView = {
+  team: { prefix:'hist',  entries:[], seen:new Set(), oldestTs:null, exhausted:false, loading:false },
+  dept: { prefix:'ghist', entries:[], seen:new Set(), oldestTs:null, exhausted:false, loading:false },
+};
+function historyScopeTeamIds(scope){
+  if(scope==='dept') return teamsInDepartment(currentDepartmentId).map(t=>t.id);
+  return currentTeamId ? [currentTeamId] : [];
+}
+// One page of the log. The filter and the ordering are both on `ts`, which Firestore indexes
+// on its own — deliberately, so this needs no composite index deployed alongside it.
+// The boundary is inclusive, because a department-wide action writes several entries in the
+// same millisecond and an exclusive one would drop whichever of them a page ended on. That
+// re-reads the entries at the boundary, so the caller drops what it already has by id.
+async function fetchAuditPage(oldestSeenTs){
+  const { db, collection, query, where, orderBy, limit, getDocs } = window.rotaDb;
+  const clauses = [orderBy('ts','desc'), limit(HISTORY_PAGE_SIZE)];
+  if(oldestSeenTs) clauses.unshift(where('ts','<=',oldestSeenTs));
+  const snap = await getDocs(query(collection(db,'audit_log'), ...clauses));
+  const out = [];
+  snap.forEach(d=> out.push({ id: d.id, ...d.data() }));
+  return out;
+}
+function isScheduleHistoryEntry(e){
+  return e && (e.action==='schedule.edit' || e.action==='schedule.layout');
+}
+// Consecutive days read as a run: "Mon 22–Fri 26" rather than five separate days.
+function historyDateRunLabel(dates){
+  const sorted = [...new Set(dates||[])].sort();
+  const runs = [];
+  sorted.forEach(d=>{
+    const last = runs[runs.length-1];
+    const nextOfLast = last ? iso(addDays(new Date(last[last.length-1]+'T00:00:00'), 1)) : null;
+    if(last && nextOfLast===d) last.push(d); else runs.push([d]);
+  });
+  return runs.map(r=> r.length>1
+    ? `${dayAndDateLabel(r[0])}–${dayAndDateLabel(r[r.length-1])}`
+    : dayAndDateLabel(r[0])).join(', ');
+}
+// The changes in one entry, as one line per person-and-task rather than one per day.
+function historyChangeLines(e){
+  const d = e.details || {};
+  const lines = [];
+  const pack = (items, dir)=>{
+    const byPair = new Map();
+    (items||[]).forEach(it=>{
+      const k = (it.p||'') + '\u0001' + (it.t||'');
+      if(!byPair.has(k)) byPair.set(k, []);
+      byPair.get(k).push(it.d);
+    });
+    byPair.forEach((dates, k)=>{
+      const [person, task] = k.split('\u0001');
+      lines.push({ dir, person, task, when: historyDateRunLabel(dates) });
+    });
+  };
+  pack(d.removed, 'off');
+  pack(d.added, 'on');
+  return lines;
+}
+const HISTORY_OP_TEXT = {
+  'generate': 'generated the whole week',
+  'generate-shared': "rotated the department's shared tasks",
+  'fill': 'filled in the gaps',
+  'update': 'updated the week against the current rules',
+  'clear': 'cleared the week',
+  'ooo-cover': 'marked time off, and the schedule was re-covered',
+  'undo': 'undid the change before it',
+};
+function historyHeadline(e){
+  const d = e.details || {};
+  const who = `<strong>${escHtml(e.actorName || 'Someone')}</strong>`;
+  if(e.action==='schedule.layout'){
+    const where = d.scope==='department' ? ' for every team in the department' : '';
+    return `${who} moved <strong>${escHtml(d.task||'a task')}</strong> to ${Number(d.to)||'?'} of ${Number(d.of)||'?'} in the schedule's order${where}`;
+  }
+  const added = Number(d.addedCount)||0, removed = Number(d.removedCount)||0;
+  const plural = n=> n===1 ? '' : 's';
+  const counted = added && removed ? `${added} in, ${removed} out`
+    : added ? `${added} assignment${plural(added)}`
+    : removed ? `${removed} assignment${plural(removed)} removed` : '';
+  if(HISTORY_OP_TEXT[d.op]) return `${who} ${HISTORY_OP_TEXT[d.op]} <span class="hist-counted">· ${escHtml(counted)}</span>`;
+  const lines = historyChangeLines(e);
+  // A single hand-made change is the whole story, so it reads as the headline rather than as a
+  // count with one line hidden under it. Same for the swap it usually is: one person off and
+  // another onto the same task is one decision, not two unrelated edits.
+  if(lines.length===1 && added+removed<=5){
+    const l = lines[0];
+    return l.dir==='off'
+      ? `${who} took <strong>${escHtml(l.person)}</strong> off ${escHtml(l.task)} — ${escHtml(l.when)}`
+      : `${who} put <strong>${escHtml(l.person)}</strong> on ${escHtml(l.task)} — ${escHtml(l.when)}`;
+  }
+  if(lines.length===2 && lines[0].dir==='off' && lines[1].dir==='on' && lines[0].task===lines[1].task){
+    return `${who} swapped <strong>${escHtml(lines[0].person)}</strong> for <strong>${escHtml(lines[1].person)}</strong>`
+      + ` on ${escHtml(lines[0].task)} — ${escHtml(lines[1].when)}`;
+  }
+  return `${who} changed the week <span class="hist-counted">· ${escHtml(counted)}</span>`;
+}
+function historyEntryHtml(e){
+  const d = e.details || {};
+  const when = new Date(e.ts||0);
+  const time = when.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+  const weekLabel = d.week ? fmtWeek(new Date(d.week+'T00:00:00')) : '';
+  const meta = [d.teamName || '', weekLabel ? `week of ${weekLabel}` : ''].filter(Boolean).join(' · ');
+  const lines = e.action==='schedule.layout' ? [] : historyChangeLines(e);
+  const shown = (Number(d.addedCount)||0) + (Number(d.removedCount)||0);
+  const stored = ((d.added||[]).length + (d.removed||[]).length);
+  const notShown = Math.max(0, shown - stored);
+  // The lines are only worth unfolding when the headline didn't already say it all.
+  const swap = lines.length===2 && lines[0].dir==='off' && lines[1].dir==='on' && lines[0].task===lines[1].task;
+  const single = !HISTORY_OP_TEXT[d.op] && ((lines.length===1 && shown<=5) || swap);
+  let detail = '';
+  if(lines.length && !single){
+    detail = `<details class="hist-detail"><summary>${lines.length===1?'Show the change':`Show ${lines.length} change${lines.length===1?'':'s'}`}</summary>`
+      + lines.map(l=> `<div class="hist-change hist-change-${l.dir}">
+            <strong>${escHtml(l.person)}</strong> ${l.dir==='off'?'off':'on'} ${escHtml(l.task)} · ${escHtml(l.when)}
+          </div>`).join('')
+      + (notShown ? `<div class="hist-change muted">…and ${notShown} more not listed</div>` : '')
+      + `</details>`;
+  }
+  return `<div class="hist-row">
+    <div class="hist-when mono">${escHtml(time)}</div>
+    <div class="hist-body">
+      <div class="hist-head">${historyHeadline(e)}</div>
+      ${meta ? `<div class="hist-meta">${escHtml(meta)}</div>` : ''}
+      ${detail}
+    </div>
+  </div>`;
+}
+// Everything an entry says, as one string — what the filter box matches against.
+function historySearchText(e){
+  const d = e.details || {};
+  return [e.actorName, d.teamName, d.op, d.task, d.week, HISTORY_OP_TEXT[d.op]]
+    .concat((d.added||[]).map(i=>`${i.p} ${i.t}`), (d.removed||[]).map(i=>`${i.p} ${i.t}`))
+    .filter(Boolean).join(' ').toLowerCase();
+}
+function historyDayHeading(ts){
+  const d = new Date(ts);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const that = new Date(d); that.setHours(0,0,0,0);
+  const daysAgo = Math.round((today - that) / 86400000);
+  if(daysAgo===0) return 'Today';
+  if(daysAgo===1) return 'Yesterday';
+  return d.toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
+}
+// Returns false when a page brought nothing new, so a caller looking for more to show stops
+// rather than asking for the same page again.
+async function loadMoreHistory(scope){
+  const view = historyView[scope];
+  if(view.loading || view.exhausted) return false;
+  view.loading = true;
+  try{
+    const page = await fetchAuditPage(view.oldestTs);
+    if(page.length < HISTORY_PAGE_SIZE) view.exhausted = true;
+    const fresh = page.filter(e=> e.id && !view.seen.has(e.id));
+    fresh.forEach(e=> view.seen.add(e.id));
+    if(fresh.length===0) view.exhausted = true; // only the boundary came back: there is no more
+    if(page.length) view.oldestTs = page[page.length-1].ts;
+    view.entries = view.entries.concat(fresh.filter(isScheduleHistoryEntry));
+    return fresh.length > 0;
+  } finally {
+    view.loading = false;
+  }
+}
+async function renderHistoryTab(scope, opts){
+  const view = historyView[scope];
+  const wrap = document.getElementById(view.prefix+'-wrap');
+  if(!wrap) return;
+  if(opts && opts.reset){ view.entries = []; view.seen = new Set(); view.oldestTs = null; view.exhausted = false; }
+  const label = document.getElementById(scope==='dept' ? 'ghist-dept-name' : 'hist-team-label');
+  if(label){
+    label.textContent = scope==='dept'
+      ? `— ${(state.departments.find(d=>d.id===currentDepartmentId)||{}).name || 'this department'}`
+      : `— ${(state.teams.find(t=>t.id===currentTeamId)||{}).name || 'this team'}`;
+  }
+  if(view.entries.length===0 && !view.exhausted){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
+    try{ await loadMoreHistory(scope); }
+    catch(err){
+      console.error('Could not load the schedule history', err);
+      wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Couldn't load the history — try Refresh, or check you're still signed in.</div>`;
+      return;
+    }
+  }
+  const teamIds = new Set(historyScopeTeamIds(scope));
+  const q = (document.getElementById(view.prefix+'-search')?.value || '').trim().toLowerCase();
+  const rows = view.entries
+    .filter(e=> teamIds.has((e.details||{}).teamId || e.teamId))
+    .filter(e=> !q || historySearchText(e).includes(q));
+
+  const moreBtn = document.getElementById('btn-'+view.prefix+'-more');
+  if(moreBtn){
+    moreBtn.style.display = view.exhausted ? 'none' : '';
+    moreBtn.textContent = view.loading ? 'Loading…' : 'Load older';
+  }
+  const countEl = document.getElementById(view.prefix+'-count');
+  if(countEl){
+    countEl.textContent = rows.length
+      ? `${rows.length} change${rows.length===1?'':'s'}${view.exhausted?'':' so far'}${q?' matching':''}`
+      : '';
+  }
+  if(rows.length===0){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">${q
+      ? 'Nothing matches that.'
+      : 'Nothing yet — every change made to the schedule from now on shows up here, with who made it.'}</div>`;
+    return;
+  }
+  let html = '', lastHeading = null;
+  rows.forEach(e=>{
+    const heading = historyDayHeading(e.ts);
+    if(heading !== lastHeading){
+      html += `<div class="hist-day">${escHtml(heading)}</div>`;
+      lastHeading = heading;
+    }
+    html += historyEntryHtml(e);
+  });
+  wrap.innerHTML = html;
+}
+['hist','ghist'].forEach(prefix=>{
+  const scope = prefix==='ghist' ? 'dept' : 'team';
+  document.getElementById(prefix+'-search').addEventListener('input', ()=> renderHistoryTab(scope));
+  document.getElementById('btn-'+prefix+'-refresh').addEventListener('click', ()=> renderHistoryTab(scope, { reset:true }));
+  document.getElementById('btn-'+prefix+'-more').addEventListener('click', async ()=>{
+    const view = historyView[scope];
+    const btn = document.getElementById('btn-'+prefix+'-more');
+    btn.textContent = 'Loading…';
+    // Keep paging until this scope actually gains something to show: a page of the log can be
+    // all other teams' entries, and a button that looks like it did nothing is worse than one
+    // that takes a moment.
+    const before = view.entries.length;
+    while(!view.exhausted && view.entries.length===before){
+      if(!await loadMoreHistory(scope)) break;
+    }
+    await renderHistoryTab(scope);
+  });
+});
 
 // ================= SCHEDULE TAB =================
 async function renderScheduleTab(){
@@ -9515,7 +9951,7 @@ async function removeFromOneDay(taskId, dateISO, memberId, refreshAfterUndo){
     await withBorrowedTeamContext(teamId, weekMonday, async ()=>{
       currentSchedule[dateISO] = currentSchedule[dateISO] || {};
       currentSchedule[dateISO][taskId] = before.slice();
-      await saveWeek(iso(currentWeekMonday), currentSchedule);
+      await saveWeek(iso(currentWeekMonday), currentSchedule, { op:'undo' });
       balanceCache = null;
     });
     if(refreshAfterUndo) await refreshAfterUndo();
@@ -9905,7 +10341,7 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
             currentSchedule[dISO] = currentSchedule[dISO] || {};
             currentSchedule[dISO][pick.task.id] = currentSchedule[dISO][pick.task.id] || [];
             if(!currentSchedule[dISO][pick.task.id].includes(pick.member.id)) currentSchedule[dISO][pick.task.id].push(pick.member.id);
-            await saveWeek(iso(currentWeekMonday), currentSchedule, { skipDirtyTracking:true });
+            await saveWeek(iso(currentWeekMonday), currentSchedule, { skipDirtyTracking:true, op:'ooo-cover' });
             await safeSet('notified_snapshot_'+pick.team.id+'_'+crossWeekISO, currentSchedule, true);
           });
           crossTeam++;
@@ -9925,7 +10361,7 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
               currentSchedule[dISO] = currentSchedule[dISO] || {};
               currentSchedule[dISO][cross.task.id] = currentSchedule[dISO][cross.task.id] || [];
               if(!currentSchedule[dISO][cross.task.id].includes(cross.member.id)) currentSchedule[dISO][cross.task.id].push(cross.member.id);
-              await saveWeek(iso(currentWeekMonday), currentSchedule, { skipDirtyTracking:true });
+              await saveWeek(iso(currentWeekMonday), currentSchedule, { skipDirtyTracking:true, op:'ooo-cover' });
               // Keep this team's notified-snapshot in sync with what was just sent instantly —
               // otherwise a later manual-edit-triggered batch send would diff against a stale
               // baseline and notify this same coverage change a second time.
@@ -9943,7 +10379,7 @@ async function autoReplaceForOOOInTeam(memberId, dateISOs){
       }
     }
     if(changed){
-      await saveWeek(wISO, sched, { skipDirtyTracking:true });
+      await saveWeek(wISO, sched, { skipDirtyTracking:true, op:'ooo-cover' });
       await safeSet('notified_snapshot_'+originTeamId+'_'+wISO, sched, true);
       if(wISO === iso(currentWeekMonday)) drawScheduleGrid(); // keep the on-screen grid in sync if it's the affected week
     }
@@ -10045,7 +10481,7 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
     const sched = await generateWeek(genWeekMonday, { excludeTaskNames });
     currentSchedule = sched;
     const weekISO = iso(genWeekMonday);
-    await saveWeek(weekISO, sched);
+    await saveWeek(weekISO, sched, { op:'generate' });
 
     if(sharedGroups.length>0){
       document.getElementById('sched-status').textContent = 'Rotating shared tasks across the department…';
@@ -10076,7 +10512,7 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
       for(const tid of allTeamIdsInvolved){
         await withBorrowedTeamContext(tid, genWeekMonday, async ()=>{
           currentSchedule = teamSchedules[tid];
-          await saveWeek(weekISO, currentSchedule);
+          await saveWeek(weekISO, currentSchedule, { op:'generate-shared' });
         });
       }
       currentSchedule = teamSchedules[currentTeamId];
@@ -10089,7 +10525,7 @@ document.getElementById('btn-generate').addEventListener('click', async ()=>{
       for(const [tid, snap] of Object.entries(snapshots)){
         await withBorrowedTeamContext(tid, genWeekMonday, async ()=>{
           currentSchedule = snap;
-          await saveWeek(weekISO, snap);
+          await saveWeek(weekISO, snap, { op:'undo' });
         });
       }
       currentSchedule = snapshots[currentTeamId];
@@ -10108,13 +10544,13 @@ document.getElementById('btn-fill-in').addEventListener('click', ()=>{
     const sched = await generateWeek(currentWeekMonday, { mode:'fill', keepSchedule: snapshot });
     currentSchedule = sched;
     const weekISO = iso(currentWeekMonday);
-    await saveWeek(weekISO, sched);
+    await saveWeek(weekISO, sched, { op:'fill' });
     document.getElementById('sched-status').textContent = '';
     balanceCache = null;
     drawScheduleGrid();
     pushUndo(async ()=>{
       currentSchedule = snapshot;
-      await saveWeek(weekISO, snapshot);
+      await saveWeek(weekISO, snapshot, { op:'undo' });
       balanceCache = null;
       drawScheduleGrid();
       showToast('Restored');
@@ -10130,13 +10566,13 @@ document.getElementById('btn-update-sched').addEventListener('click', ()=>{
     const sched = await generateWeek(currentWeekMonday, { mode:'update', keepSchedule: snapshot });
     currentSchedule = sched;
     const weekISO = iso(currentWeekMonday);
-    await saveWeek(weekISO, sched);
+    await saveWeek(weekISO, sched, { op:'update' });
     document.getElementById('sched-status').textContent = '';
     balanceCache = null;
     drawScheduleGrid();
     pushUndo(async ()=>{
       currentSchedule = snapshot;
-      await saveWeek(weekISO, snapshot);
+      await saveWeek(weekISO, snapshot, { op:'undo' });
       balanceCache = null;
       drawScheduleGrid();
       showToast('Restored');
@@ -10162,13 +10598,13 @@ document.getElementById('btn-clear-week').addEventListener('click', ()=>{
     const weekISO = iso(currentWeekMonday);
     const snapshot = JSON.parse(JSON.stringify(currentSchedule));
     currentSchedule = {};
-    await saveWeek(weekISO, {});
+    await saveWeek(weekISO, {}, { op:'clear' });
     balanceCache = null;
     drawScheduleGrid();
     renderYourWeekSummary();
     pushUndo(async ()=>{
       currentSchedule = snapshot;
-      await saveWeek(weekISO, snapshot);
+      await saveWeek(weekISO, snapshot, { op:'undo' });
       balanceCache = null;
       drawScheduleGrid();
       renderYourWeekSummary();
