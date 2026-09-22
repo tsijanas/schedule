@@ -5,7 +5,11 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
 
 ## Next round — starts after `0fb2952` (22 Sep 2026)
 
-Nothing yet.
+- **App icon** — installing the tool now shows the app's own mark (the sidebar's wave and dot,
+  on teal) instead of a letter on a grey square. The icons and `manifest.json` existed in the
+  repo but were never copied into the container, so the deployed site served none of them; the
+  sign-in page had no manifest link at all. Both fixed, with sizes for browser tabs, iOS and
+  Android, including maskable ones so a launcher's crop doesn't cut the mark.
 
 ---
 

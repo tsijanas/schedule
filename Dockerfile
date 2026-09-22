@@ -13,6 +13,15 @@ RUN rm -rf /usr/share/nginx/html/*
 COPY index.html /usr/share/nginx/html/index.html
 COPY login.html /usr/share/nginx/html/login.html
 
+# The web app manifest and the icons. Without these the install prompt has no icon to use and
+# the browser falls back to drawing the first letter of the name on a plain square — which is
+# what "add to home screen" produced for as long as only the two HTML files were copied in.
+COPY manifest.json /usr/share/nginx/html/manifest.json
+COPY favicon.ico favicon.svg favicon-16x16.png favicon-32x32.png favicon-48.png \
+     apple-touch-icon.png \
+     icon-192.png icon-512.png icon-maskable-192.png icon-maskable-512.png \
+     /usr/share/nginx/html/
+
 # Custom nginx config: sensible caching + basic security headers
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

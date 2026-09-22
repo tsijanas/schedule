@@ -18,7 +18,12 @@ docker run -p 80:80 rota
 ```
 
 That's the whole thing — it's a static website behind nginx, nothing else running, no database
-on this server, no server-side code to maintain. In production you'll want this behind whatever
+on this server, no server-side code to maintain.
+
+The image carries the two HTML files, `manifest.json`, and the icons. All of them have to be
+in the build context when the image is built — if the manifest or the icons are missing from
+the running site, "add to home screen" falls back to drawing the first letter of the name on a
+plain square instead of the app's icon. In production you'll want this behind whatever
 your infrastructure normally uses for TLS/HTTPS and your actual domain name (a reverse proxy,
 load balancer, or however your team normally terminates HTTPS) — that part follows your
 existing standards, nothing specific to this app.
