@@ -194,6 +194,16 @@
   .req-breakdown-table{ width:100%; }
   .req-breakdown-table th, .req-breakdown-table td{ text-align:center; padding:3px 4px; }
   .req-breakdown-table th:first-child, .req-breakdown-table td:first-child{ text-align:left; }
+  /* The level steppers size themselves here rather than from a hand-set width in the markup.
+     input[type=number] below gives every number box 9px of side padding and a border, so a
+     22px-wide input had about two pixels left for the digits and clipped them. These are wide
+     enough for the padding they actually have, plus room for a two-digit requirement. */
+  .req-breakdown-table .stepper{ max-width:none; width:auto; gap:3px; }
+  input[type=number].req-bd-input, input[type=number].grand-bd-input{
+    width:40px; padding:5px 3px; text-align:center; font-weight:700; -moz-appearance:textfield;
+  }
+  .req-bd-input::-webkit-outer-spin-button, .req-bd-input::-webkit-inner-spin-button,
+  .grand-bd-input::-webkit-outer-spin-button, .grand-bd-input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
   .stepper{ display:flex; align-items:center; justify-content:center; gap:2px; border-radius:20px; padding:3px; margin:0 auto; max-width:90px; transition:background 0.15s ease; }
   .stepper-btn{ width:20px; height:20px; border-radius:50%; border:none; background:rgba(255,255,255,0.65); font-weight:700; font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--ink); flex-shrink:0; }
   .stepper-btn:hover{ background:#fff; }
@@ -6554,9 +6564,9 @@ function renderReqBreakdownPanel(taskId, panel){
     </td>`;
     DAYS.forEach(d=>{
       const v = (breakdown[d] && breakdown[d][level]) || 0;
-      html += `<td><div class="stepper" style="transform:scale(0.85); transform-origin:center;">
+      html += `<td><div class="stepper">
         <button type="button" class="stepper-btn req-bd-btn" data-dir="-1" data-level="${level}" data-day="${d}">−</button>
-        <input type="number" min="0" class="req-bd-input" data-level="${level}" data-day="${d}" value="${v}" style="width:28px;">
+        <input type="number" min="0" class="req-bd-input" data-level="${level}" data-day="${d}" value="${v}">
         <button type="button" class="stepper-btn req-bd-btn" data-dir="1" data-level="${level}" data-day="${d}">+</button>
       </div></td>`;
     });
@@ -6628,7 +6638,7 @@ function renderGrandReqBreakdownPanel(key, g, panel){
     </td>`;
     DAYS.forEach(d=>{
       const v = (breakdown[d] && breakdown[d][level]) || 0;
-      html += `<td><div class="stepper grand-bd-stepper" style="max-width:none; width:74px;" data-level="${level}" data-day="${d}"><button type="button" class="stepper-btn grand-bd-btn" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" data-dir="-1">−</button><input type="number" class="stepper-val grand-bd-input" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" value="${v}" style="width:22px;"><button type="button" class="stepper-btn grand-bd-btn" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" data-dir="1">+</button></div></td>`;
+      html += `<td><div class="stepper grand-bd-stepper" data-level="${level}" data-day="${d}"><button type="button" class="stepper-btn grand-bd-btn" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" data-dir="-1">−</button><input type="number" min="0" class="grand-bd-input" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" value="${v}"><button type="button" class="stepper-btn grand-bd-btn" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" data-dir="1">+</button></div></td>`;
     });
     html += `</tr>`;
   });
