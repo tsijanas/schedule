@@ -753,6 +753,8 @@
      rather than being left to wrap into a different shape on every row. */
   .req-task-line{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .req-task-sub{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:3px; font-weight:400; }
+  .req-level-cell{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .req-level-cell .req-avail{ font-weight:500; }
   .req-avail{ font-size:10.5px; font-weight:500; color:var(--ink-soft); background:rgba(0,70,84,0.06); border-radius:6px; padding:1px 6px; white-space:nowrap; }
   .req-avail-short{ background:var(--brick-soft); color:var(--brick-text); font-weight:700; }
   /* Moving a task row. The grip is the drag target; the arrows do the same job without a
@@ -6357,7 +6359,7 @@ function fmtReqDate(dISO){
 // the busiest day asks for more than the thinnest day can supply, which is the one number that
 // says "this can't be staffed". The chip itself stays short — the day-by-day picture is in its
 // tooltip, which is where it belongs on a table that already has seven columns of numbers.
-function availabilityChipHtml(members, row, weekMonday){
+function availabilityChipHtml(members, row, weekMonday, level){
   const dates = DAYS.map((d,i)=> iso(addDays(weekMonday,i)));
   const perDay = DAYS.map((d,i)=> members.filter(m=> !isOnHoliday(m.id, dates[i])).length);
   const anyWeek = members.filter(m=> dates.some((dISO,i)=> !isOnHoliday(m.id, dISO))).length;
@@ -6366,31 +6368,48 @@ function availabilityChipHtml(members, row, weekMonday){
   const biggestAsk = neededDays.length ? Math.max(...neededDays.map(x=>x.need)) : 0;
   const cannotCover = biggestAsk > worst;
   const detail = DAYS.map((d,i)=> `${DAY_LABELS[d].slice(0,3)} ${perDay[i]}`).join(' · ');
+  const who = level ? `${anyWeek} ${level}${anyWeek===1?'':'s'}` : `${anyWeek}`;
   const title = cannotCover
-    ? `${anyWeek} can work this task this week. It asks for ${biggestAsk} on its busiest day, but only ${worst} can work the thinnest day of the week. Availability by day: ${detail}`
-    : `${anyWeek} can work this task this week. Availability by day: ${detail}`;
+    ? `${who} can work this task this week. It asks for ${biggestAsk} on its busiest day, but only ${worst} can work the thinnest day of the week. Availability by day: ${detail}`
+    : `${who} can work this task this week. Availability by day: ${detail}`;
   return `<span class="req-avail ${cannotCover?'req-avail-short':''}" title="${escAttr(title)}">${cannotCover?'⚠ ':''}${anyWeek} available</span>`;
 }
-function taskAvailabilityHtml(task, row, weekMonday, pool){
-  return availabilityChipHtml((pool || teamMembers()).filter(m=>
+// Who a task can draw on at all: eligible for it, allowed by whatever levels it restricts to,
+// and holding a level that can be scheduled in the first place.
+function membersForTask(task, pool){
+  return (pool || teamMembers()).filter(m=>
     m.eligibility && m.eligibility[task.id] && levelAllowed(task, m.levels)
-    && (m.levels||[]).some(l=>LEVELS.includes(l))), row, weekMonday);
+    && (m.levels||[]).some(l=>LEVELS.includes(l)));
 }
 // The department-wide version. A task name is a different task row on each team, with its own
 // eligibility and its own level restriction, so the people are collected per team and unioned —
 // this is the whole department's answer to "who could work this", not one team's.
-function grandTaskAvailabilityHtml(group, row, weekMonday){
+function membersForGrandTask(group){
   const seen = new Set();
   const members = [];
   ((group||{}).perTeam || []).forEach(({team, task})=>{
-    state.members.forEach(m=>{
-      if(m.teamId!==team.id || seen.has(m.id)) return;
-      if(!(m.eligibility && m.eligibility[task.id] && levelAllowed(task, m.levels))) return;
-      if(!(m.levels||[]).some(l=>LEVELS.includes(l))) return;
+    membersForTask(task, state.members.filter(m=> m.teamId===team.id)).forEach(m=>{
+      if(seen.has(m.id)) return;
       seen.add(m.id); members.push(m);
     });
   });
-  return availabilityChipHtml(members, row, weekMonday);
+  return members;
+}
+function taskAvailabilityHtml(task, row, weekMonday, pool){
+  return availabilityChipHtml(membersForTask(task, pool), row, weekMonday);
+}
+function grandTaskAvailabilityHtml(group, row, weekMonday){
+  return availabilityChipHtml(membersForGrandTask(group), row, weekMonday);
+}
+// The same chip for one level of a task, shown beside that level inside the breakdown panel:
+// the task's own total says nothing about whether the people it can draw on are the right
+// levels, which is exactly the question a per-level minimum raises. Someone holding two levels
+// counts under both, so these can add up to more than the task's own number — they answer
+// "could this level's minimum be met", not "how is the total divided".
+function levelAvailabilityHtml(members, level, breakdown, weekMonday){
+  const levelRow = {};
+  DAYS.forEach(d=> levelRow[d] = ((breakdown||{})[d] || {})[level] || 0);
+  return availabilityChipHtml(members.filter(m=> (m.levels||[]).includes(level)), levelRow, weekMonday, level);
 }
 function renderReqTab(){
   const wrap = document.getElementById('req-table-wrap');
@@ -6522,13 +6541,17 @@ function renderReqTab(){
 }
 function renderReqBreakdownPanel(taskId, panel){
   const breakdown = state.reqLevels[taskId] || {};
+  const task = state.tasks.find(t=>t.id===taskId);
+  const eligible = task ? membersForTask(task) : [];
   let html = `<div style="padding:12px 4px;">
-    <div class="muted" style="font-size:11.5px; margin-bottom:10px;">Minimum per level, per day — total above updates to match.</div>
+    <div class="muted" style="font-size:11.5px; margin-bottom:10px;">Minimum per level, per day — total above updates to match. Beside each level: how many of that level this task can actually draw on this week.</div>
     <table class="req-breakdown-table"><thead><tr><th style="text-align:left;">Level</th>`;
   DAYS.forEach(d=> html += `<th style="font-size:10.5px;">${DAY_LABELS[d].slice(0,3)}</th>`);
   html += `</tr></thead><tbody>`;
   LEVELS.forEach(level=>{
-    html += `<tr data-level="${level}"><td style="font-size:12px; font-weight:600;">${level}</td>`;
+    html += `<tr data-level="${level}"><td style="font-size:12px; font-weight:600;">
+      <div class="req-level-cell">${level}${task ? levelAvailabilityHtml(eligible, level, breakdown, reqWeekMonday) : ''}</div>
+    </td>`;
     DAYS.forEach(d=>{
       const v = (breakdown[d] && breakdown[d][level]) || 0;
       html += `<td><div class="stepper" style="transform:scale(0.85); transform-origin:center;">
@@ -6586,6 +6609,7 @@ function renderReqBreakdownPanel(taskId, panel){
 }
 function renderGrandReqBreakdownPanel(key, g, panel){
   const breakdown = grandReqLevels[key] || {};
+  const deptEligible = membersForGrandTask(g);
   const teamSizesByLevel = {};
   g.perTeam.forEach(({team})=>{
     teamSizesByLevel[team.id] = {};
@@ -6594,12 +6618,14 @@ function renderGrandReqBreakdownPanel(key, g, panel){
     });
   });
   let html = `<div style="padding:12px 4px;">
-    <div class="muted" style="font-size:11.5px; margin-bottom:10px;">Minimum per level, department-wide, per day. Hover to preview split — click to apply.</div>
+    <div class="muted" style="font-size:11.5px; margin-bottom:10px;">Minimum per level, department-wide, per day. Hover to preview split — click to apply. Beside each level: how many of that level the whole department can draw on for this task this week.</div>
     <table class="req-breakdown-table"><thead><tr><th style="text-align:left;">Level</th>`;
   DAYS.forEach(d=> html += `<th>${DAY_LABELS[d]}</th>`);
   html += `</tr></thead><tbody>`;
   LEVELS.forEach(level=>{
-    html += `<tr data-level="${level}"><td style="font-weight:700; font-size:13px;">${level}</td>`;
+    html += `<tr data-level="${level}"><td style="font-weight:700; font-size:13px;">
+      <div class="req-level-cell">${level}${levelAvailabilityHtml(deptEligible, level, breakdown, grandReqWeekMonday)}</div>
+    </td>`;
     DAYS.forEach(d=>{
       const v = (breakdown[d] && breakdown[d][level]) || 0;
       html += `<td><div class="stepper grand-bd-stepper" style="max-width:none; width:74px;" data-level="${level}" data-day="${d}"><button type="button" class="stepper-btn grand-bd-btn" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" data-dir="-1">−</button><input type="number" class="stepper-val grand-bd-input" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" value="${v}" style="width:22px;"><button type="button" class="stepper-btn grand-bd-btn" data-gkey="${escAttr(key)}" data-level="${level}" data-day="${d}" data-dir="1">+</button></div></td>`;
