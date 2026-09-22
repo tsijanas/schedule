@@ -241,7 +241,7 @@
   .sched-table{ border:1px solid var(--line); border-radius:10px; overflow:hidden; table-layout:fixed; width:100%; }
   .sched-table th, .sched-table td{ text-align:center; border:1px solid var(--line); }
   .sched-table thead th{ background:var(--gold-soft); border-bottom:1px solid var(--line); padding:10px 6px; }
-  .sched-table th:first-child, .sched-table td.taskname{ width:15%; }
+  .sched-table th:first-child, .sched-table td.taskname{ width:17%; }
   .sched-table td.taskname{
     text-align:left; font-weight:600; position:sticky; left:0;
     background:var(--paper); z-index:2; font-size:13.5px; overflow:hidden;
@@ -729,6 +729,27 @@
   .cov-legend span.sw{ display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
   .req-avail{ font-size:10.5px; font-weight:500; color:var(--ink-soft); background:rgba(0,70,84,0.06); border-radius:6px; padding:1px 6px; white-space:nowrap; }
   .req-avail-short{ background:var(--brick-soft); color:var(--brick-text); font-weight:700; }
+  /* Moving a task row. The grip is the drag target; the arrows do the same job without a
+     mouse, and on a touch screen, where HTML5 drag-and-drop doesn't fire at all. */
+  /* The handle sits on the same line as the task name, and keeps its space when hidden, so
+     nothing shifts sideways as the pointer moves down the rows. */
+  .taskname-cell{ display:flex; align-items:center; gap:3px; min-width:0; }
+  .taskname-cell .taskname-inner{ min-width:0; flex:1; }
+  .task-move{ display:inline-flex; align-items:center; gap:1px; flex:none; opacity:0; transition:opacity 0.12s;
+    user-select:none; }  /* kept out of a copied selection, so pasting a schedule stays clean */
+  tr:hover .task-move, .task-move:focus-within{ opacity:1; }
+  .task-grip{ cursor:grab; font-size:11px; color:var(--ink-faint); padding:0 2px; }
+  .task-grip::before{ content:"\2807"; }
+  .task-grip:active{ cursor:grabbing; }
+  /* Stacked, so the pair is about as wide as one character and the task name keeps its room. */
+  .task-move-arrows{ display:flex; flex-direction:column; }
+  .task-move-btn{ background:none; border:none; padding:0; font-size:7px; line-height:1.1; color:var(--ink-faint); cursor:pointer; }
+  .task-move-btn:hover{ color:var(--ink); }
+  .task-move-btn[data-move="-1"]::before{ content:"\25B2"; }
+  .task-move-btn[data-move="1"]::before{ content:"\25BC"; }
+  tr.task-row-dragging{ opacity:0.45; }
+  tr.task-drop-above td{ box-shadow:inset 0 2px 0 var(--ink); }
+  tr.task-drop-below td{ box-shadow:inset 0 -2px 0 var(--ink); }
   .week-nav{ display:flex; align-items:center; gap:10px; }
   .week-nav button{ background:var(--paper); border:1px solid var(--line); border-radius:8px; width:30px; height:30px; font-size:15px; }
   .week-nav .wk-label{ font-family:'Fraunces',serif; font-weight:600; font-size:16px; min-width:210px; text-align:center; }
@@ -1025,6 +1046,7 @@
           <h3 style="margin-top:0;">The weekly loop, in short</h3>
           <p class="muted" style="font-size:12.5px; line-height:1.7; margin:0;">
             <strong>Review</strong> what's here for the week — <strong>adjust</strong> if something's wrong (click any name directly for one swap, or use "Replace someone this week" if they need to come off everything) — <strong>Generate</strong> only if you want the algorithm to fill it in from scratch (it replaces the whole week, not just the gaps — there's a confirmation and an undo either way) — then <strong>Send notifications</strong> once you're happy, so people actually find out what changed.
+            <br><br>To change the order the tasks are listed in, hover a task name and drag it by the grip (or use the small arrows) — that order is then used everywhere else tasks appear: Requirement, People, Coverage, Rotation balance and everyone's own view.
             <span id="onboarding-grand-note" style="display:none;"><br><br>Since this team's in a department: "Schedule" is just this one team. "Grand Schedule" combines every team in the department into one view — most day-to-day adjusting happens in the plain Schedule tab; Grand Schedule is for the department-wide picture and bulk actions across teams at once.</span>
           </p>
         </div>
@@ -1080,7 +1102,7 @@
         </div>
       </div>
       <div class="card" style="overflow-x:auto;">
-        <div class="hint">Every team in this department, stacked together, for the week above — click any name or the + to add, replace, or remove someone, exactly like a normal team's Schedule tab. Changes here are the same real data each team sees in their own Schedule tab, not a copy.</div>
+        <div class="hint">Every team in this department, stacked together, for the week above — click any name or the + to add, replace, or remove someone, exactly like a normal team's Schedule tab. Changes here are the same real data each team sees in their own Schedule tab, not a copy. Dragging a task by the grip next to its name reorders it for every team in the department at once.</div>
         <div id="grand-sched-wrap"></div>
       </div>
     </div>
@@ -5644,7 +5666,10 @@ function renderTasksTab(){
     <th class="gt-actions"></th>
   </tr></thead><tbody>`;
 
-  state.tasks.forEach((t,ti)=>{
+  // Listed in the same order as the schedule, not the order they happen to sit in the array.
+  // `ti` stays the index into state.tasks, which is what every save/delete here works from.
+  sortedTasksForDisplay(state.tasks).forEach(t=>{
+    const ti = state.tasks.indexOf(t);
     const sharedCount = t.sharedTaskId ? state.teams.filter(team=> team.id!==currentTeamId && (state.tasksByTeam[team.id]||[]).some(t2=>t2.sharedTaskId===t.sharedTaskId)).length : 0;
     // Grand sharing is independent of the older sharedTaskId link — it's purely by matching
     // task name within a department that has Grand Schedule turned on.
@@ -5957,7 +5982,7 @@ function reorderReqTableRows(){
   if(!table) return;
   const tbody = table.querySelector('tbody');
   const totalRow = table.querySelector('.req-total-row');
-  const orderIds = state.tasks.map(t=>t.id);
+  const orderIds = peopleGridTaskOrder(); // the schedule's order, same as everywhere else
   orderIds.forEach(id=>{
     const tr = tbody.querySelector(`tr[data-task="${id}"]`);
     if(tr) tbody.insertBefore(tr, totalRow);
@@ -6559,7 +6584,7 @@ async function renderGrandReqTab(){
   const wrap = document.getElementById('grand-req-wrap');
   if(!wrap || !currentDepartmentId) return;
   const groups = grandTaskGroups(currentDepartmentId);
-  const names = Object.keys(groups).sort();
+  const names = sortedGrandGroupKeys(groups); // the manual order, not alphabetical
   if(names.length===0){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No shared task names yet in this department's teams.</div>`;
     return;
@@ -6842,7 +6867,7 @@ async function renderGrandBalanceTab(){
   if(!wrap || !currentDepartmentId) return;
   wrap.innerHTML = `<div class="card"><h3>Grand rotation balance</h3><div class="muted" style="padding:8px 2px;">Loading…</div></div>`;
   const groups = grandTaskGroups(currentDepartmentId);
-  const names = Object.keys(groups).sort();
+  const names = sortedGrandGroupKeys(groups); // the manual order, not alphabetical
   if(names.length===0){
     wrap.innerHTML = `<div class="card"><h3>Grand rotation balance</h3><div class="muted" style="font-size:12.5px;">No tasks yet in this department's teams.</div></div>`;
     return;
@@ -6934,7 +6959,7 @@ async function renderGrandTasksTab(){
     return;
   }
   const groups = grandTaskGroups(currentDepartmentId);
-  const names = Object.keys(groups).sort();
+  const names = sortedGrandGroupKeys(groups); // the manual order, not alphabetical
   if(names.length===0){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No tasks on any team in this department yet.</div>`;
     return;
@@ -7816,7 +7841,7 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
     const fetched = await Promise.all(rowTeams.map(team=> loadWeekForTeam(team.id, weekISO)));
     rowTeams.forEach((team,i)=>{ rowTeamData[team.id] = { sched: fetched[i] }; });
   }
-  let html = `<tr data-gkey="${escAttr(key)}"><td class="taskname" title="${escAttr(g.displayName)}">${taskNameLabelHtml(g.displayName, groupTaskLink(g))}</td>`;
+  let html = `<tr data-gkey="${escAttr(key)}" data-task-row="${escAttr(key)}"><td class="taskname" title="${escAttr(g.displayName)}"><div class="taskname-cell">${taskDragHandleHtml()}${taskNameLabelHtml(g.displayName, groupTaskLink(g))}</div></td>`;
 
   const allSameAllWeek = g.perTeam.length>0 && g.perTeam.every(({task})=>task.sameAllWeek);
   let runs = [];
@@ -8099,7 +8124,7 @@ async function renderGrandScheduleGrid(){
   const weekISO = iso(grandWeekMonday);
   const dates = DAYS.map((d,i)=> iso(addDays(grandWeekMonday,i)));
   const groups = grandTaskGroups(currentDepartmentId);
-  const names = Object.keys(groups).sort();
+  const names = sortedGrandGroupKeys(groups); // the manual order, not alphabetical
   if(names.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No tasks yet in this department's teams.</div>`; return; }
 
   // One fetch per team for this week, up front and in parallel — every row then reads from
@@ -8124,6 +8149,9 @@ async function renderGrandScheduleGrid(){
   enhanceSelectsIn(wrap);
   closeAllBarMenus();
   wrap.querySelectorAll('tr[data-gkey]').forEach(rowEl=> wireGrandScheduleRow(rowEl));
+  // A department-level move writes the same position to every team holding that task, so the
+  // team grids and the Grand grid can't end up disagreeing about the order.
+  wireTaskReorder(wrap, ids=> applyGrandTaskOrder(currentDepartmentId, ids));
 }
 // sort() with a random comparator is a well-known trap — it's biased, not a real shuffle,
 // because sort algorithms don't call the comparator evenly across all pairs. To actually
@@ -8191,8 +8219,179 @@ function taskNameLabelHtml(name, url, extraHtml){
     : `<span class="taskname-text">${escHtml(name)}</span>`;
   return `<div class="taskname-inner">${label}${extraHtml||''}</div>`;
 }
+// The one place that decides what order tasks appear in — every view goes through it, which
+// is what makes a manual order set on the Schedule show up on Requirement, Coverage, Tasks,
+// the People columns, the viewer's grids and the balance cards without any of them knowing.
+// A task carries `order` once somebody has arranged it; anything without one sorts after the
+// arranged ones, alphabetically, so a newly added task appears at the bottom rather than
+// jumping into the middle.
+function taskOrderValue(t){ return Number.isFinite(t && t.order) ? t.order : Number.POSITIVE_INFINITY; }
 function sortedTasksForDisplay(tasks){
-  return [...tasks].sort((a,b)=> (a.name||'').localeCompare(b.name||''));
+  return [...tasks].sort((a,b)=>{
+    const oa = taskOrderValue(a), ob = taskOrderValue(b);
+    if(oa !== ob) return oa - ob;
+    return (a.name||'').localeCompare(b.name||'');
+  });
+}
+// Writes a team's task order from a list of ids in the order they should read. Anything not
+// in the list keeps its relative place at the end, so this is safe to call with a partial list.
+async function applyTaskOrder(teamId, orderedIds){
+  const tasks = state.tasksByTeam[teamId] || [];
+  const seen = new Set();
+  orderedIds.forEach((id, i)=>{
+    const t = tasks.find(x=>x.id===id);
+    if(t){ t.order = i; seen.add(id); }
+  });
+  let next = orderedIds.length;
+  sortedTasksForDisplay(tasks).forEach(t=>{ if(!seen.has(t.id)) t.order = next++; });
+  const ok = await safeSet('tasks_'+teamId, tasks, true);
+  if(!ok) showToast("Couldn't save the new order — it'll go back to where it was on the next load");
+  return ok;
+}
+// Drag ended on another row, or an arrow was clicked: move one task to where another sits.
+function reorderedIds(ids, movedId, targetId, after){
+  const without = ids.filter(id=> id!==movedId);
+  let at = without.indexOf(targetId);
+  if(at < 0) return ids;
+  if(after) at += 1;
+  without.splice(at, 0, movedId);
+  return without;
+}
+function shiftedIds(ids, movedId, delta){
+  const from = ids.indexOf(movedId);
+  if(from < 0) return ids;
+  const to = Math.max(0, Math.min(ids.length-1, from + delta));
+  if(to === from) return ids;
+  const copy = ids.slice();
+  copy.splice(to, 0, copy.splice(from,1)[0]);
+  return copy;
+}
+// The grip and the two arrows that let a row be moved. Rendered only where somebody may
+// actually rearrange things — the viewer's grids just follow whatever order was set. Which
+// row a control belongs to comes from the row's own data-task-row, so this needs no ids.
+function taskDragHandleHtml(){
+  // The grip and arrow glyphs are drawn by CSS, not written into the row: that keeps the cell's
+  // text exactly the task name, so copying a schedule out of the page pastes cleanly.
+  return `<span class="task-move" title="Drag to move this task, or use the arrows">
+    <span class="task-grip" draggable="true" aria-hidden="true"></span>
+    <span class="task-move-arrows">
+      <button type="button" class="task-move-btn" data-move="-1" title="Move up" aria-label="Move this task up"></button>
+      <button type="button" class="task-move-btn" data-move="1" title="Move down" aria-label="Move this task down"></button>
+    </span>
+  </span>`;
+}
+// Drag-and-drop plus the two arrows, for any grid whose rows carry data-task-row. The team
+// grid and the Grand Schedule both use this; they differ only in how an order is saved
+// (`apply`) and how the grid is redrawn afterwards (`redraw`).
+// Listeners are delegated on the wrapper, which survives re-renders — so a row replaced on
+// its own (refreshOneGrandScheduleRow) keeps working, and wiring runs once per wrapper
+// rather than stacking a new set of handlers on every redraw.
+function wireTaskReorder(wrap, apply){
+  if(!wrap || wrap.dataset.reorderWired) return;
+  wrap.dataset.reorderWired = '1';
+  let dragId = null;
+  const rowOf = el=> el && el.closest ? el.closest('tr[data-task-row]') : null;
+  const rowIds = ()=> [...wrap.querySelectorAll('tr[data-task-row]')].map(tr=> tr.dataset.taskRow);
+  const clearMarks = ()=> wrap.querySelectorAll('.task-drop-above,.task-drop-below')
+    .forEach(tr=> tr.classList.remove('task-drop-above','task-drop-below'));
+  const dropsAfter = (row, e)=>{
+    const box = row.getBoundingClientRect();
+    return (e.clientY - box.top) > box.height/2;
+  };
+  const commit = async (ids)=>{
+    const before = rowIds();
+    if(ids.length===before.length && ids.every((id,i)=> id===before[i])) return; // nothing moved
+    // Move the rows themselves rather than rebuilding the grid: no row's content depends on
+    // where it sits, and a full rebuild of the Grand Schedule re-reads every team's week,
+    // which takes seconds. Rebuilding also isn't needed if the save fails — the toast says
+    // so, and a reload is what puts the old order back.
+    const tbody = wrap.querySelector('tbody');
+    if(tbody) ids.forEach(id=>{
+      const tr = tbody.querySelector(`tr[data-task-row="${CSS.escape(id)}"]`);
+      if(tr) tbody.appendChild(tr);
+    });
+    await apply(ids);
+  };
+  wrap.addEventListener('dragstart', (e)=>{
+    if(!e.target.closest || !e.target.closest('.task-grip')) return;
+    const row = rowOf(e.target);
+    if(!row) return;
+    dragId = row.dataset.taskRow;
+    row.classList.add('task-row-dragging');
+    if(e.dataTransfer){
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', dragId); } catch(_){} // Firefox won't drag an empty payload
+    }
+  });
+  wrap.addEventListener('dragend', ()=>{
+    dragId = null;
+    wrap.querySelectorAll('.task-row-dragging').forEach(tr=> tr.classList.remove('task-row-dragging'));
+    clearMarks();
+  });
+  wrap.addEventListener('dragover', (e)=>{
+    const row = rowOf(e.target);
+    if(!dragId || !row || row.dataset.taskRow===dragId) return;
+    e.preventDefault();
+    if(e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const cls = dropsAfter(row, e) ? 'task-drop-below' : 'task-drop-above';
+    if(row.classList.contains(cls)) return;
+    clearMarks();
+    row.classList.add(cls);
+  });
+  wrap.addEventListener('drop', async (e)=>{
+    const row = rowOf(e.target);
+    if(!dragId || !row || row.dataset.taskRow===dragId) return;
+    e.preventDefault();
+    const moved = dragId, after = dropsAfter(row, e);
+    dragId = null;
+    clearMarks();
+    // dragend clears this too, but the rows aren't rebuilt any more, so don't leave a row
+    // greyed out if a browser skips it.
+    wrap.querySelectorAll('.task-row-dragging').forEach(tr=> tr.classList.remove('task-row-dragging'));
+    await commit(reorderedIds(rowIds(), moved, row.dataset.taskRow, after));
+  });
+  wrap.addEventListener('click', async (e)=>{
+    const btn = e.target.closest ? e.target.closest('.task-move-btn') : null;
+    if(!btn) return;
+    e.stopPropagation();
+    const row = rowOf(btn);
+    if(!row) return;
+    await commit(shiftedIds(rowIds(), row.dataset.taskRow, Number(btn.dataset.move)));
+  });
+}
+// Department-wide order: the grand views group tasks by name, so a group sorts by the
+// earliest order any of its teams gave that task. Reordering there writes the same position
+// to every team that has it, so the two levels can't drift apart.
+function sortedGrandGroupKeys(groups){
+  return Object.keys(groups).sort((ka, kb)=>{
+    const oa = Math.min(...groups[ka].perTeam.map(pt=> taskOrderValue(pt.task)));
+    const ob = Math.min(...groups[kb].perTeam.map(pt=> taskOrderValue(pt.task)));
+    if(oa !== ob) return oa - ob;
+    return (groups[ka].displayName||'').localeCompare(groups[kb].displayName||'');
+  });
+}
+async function applyGrandTaskOrder(deptId, orderedKeys){
+  const groups = grandTaskGroups(deptId);
+  const posById = {}; // the department-wide position, so no two teams can disagree about it
+  const touched = new Set();
+  orderedKeys.forEach((key, i)=>{
+    (groups[key]?.perTeam || []).forEach(({team, task})=>{
+      posById[task.id] = i;
+      touched.add(team.id);
+    });
+  });
+  let ok = true;
+  for(const teamId of touched){
+    const tasks = state.tasksByTeam[teamId] || [];
+    // Whatever the department doesn't group — a task only this team has — keeps its own
+    // relative order and sits after everything the department just arranged, so a
+    // department-level move can never collide with a team's own numbering.
+    let next = orderedKeys.length;
+    sortedTasksForDisplay(tasks).forEach(t=>{ t.order = (t.id in posById) ? posById[t.id] : next++; });
+    if(!await safeSet('tasks_'+teamId, tasks, true)) ok = false;
+  }
+  if(!ok) showToast("Couldn't save the new order — it'll go back to where it was on the next load");
+  return ok;
 }
 function levelAllowed(task, memberLevels){
   if(!task || !task.levels || task.levels.length===0) return true;
@@ -8757,8 +8956,7 @@ async function coverageRowsForDepartment(dates, weekISO){
   const teamIds = [...new Set(Object.values(groups).flatMap(g=> g.perTeam.map(pt=>pt.team.id)))];
   const scheds = {};
   await Promise.all(teamIds.map(async id=>{ scheds[id] = await loadWeekForTeam(id, weekISO); }));
-  return Object.values(groups)
-    .sort((a,b)=> a.displayName.localeCompare(b.displayName))
+  return sortedGrandGroupKeys(groups).map(k=>groups[k])
     .map(g=>{
       const days = dates.map((dISO, i)=>{
         const bh = isBankHoliday(dISO);
@@ -9119,7 +9317,7 @@ function buildScheduleTableHtml(teamId){
   html += '</tr></thead><tbody>';
   sortedTasksForDisplay(state.tasks).forEach(task=>{
     const lvlTag = (task.levels && task.levels.length) ? `<span class="task-lvl-tag">${escHtml(task.levels.join('/'))}</span>` : '';
-    html += `<tr><td class="taskname" title="${escAttr(task.name)}">${taskNameLabelHtml(task.name, task.url, lvlTag)}</td>`;
+    html += `<tr data-task-row="${escAttr(task.id)}"><td class="taskname" title="${escAttr(task.name)}"><div class="taskname-cell">${taskDragHandleHtml()}${taskNameLabelHtml(task.name, task.url, lvlTag)}</div></td>`;
     runsFor(task.id).forEach(run=>{
       const span = run.endIdx - run.startIdx + 1;
       const primaryDate = run.dates[0];
@@ -9192,6 +9390,9 @@ function drawScheduleGrid(){
     });
   });
   wireBarMenus(wrap);
+  // Rearranging rows here is the team's task order everywhere — Tasks, Requirement, People,
+  // Coverage and the viewer grids all read the same sortedTasksForDisplay().
+  wireTaskReorder(wrap, ids=> applyTaskOrder(currentTeamId, ids));
   wrap.querySelectorAll('select[data-add]').forEach(sel=>{
     sel.addEventListener('change', async ()=>{
       if(!sel.value) return;
@@ -10840,7 +11041,7 @@ async function renderWhosOnTab(){
   document.getElementById('whoson-wk-label').textContent = fmtWeek(whosOnWeekMonday);
   const wrap = document.getElementById('whoson-wrap');
   const groups = whosOnPermittedGroups();
-  const names = Object.keys(groups).sort();
+  const names = sortedGrandGroupKeys(groups); // the manual order, not alphabetical
   if(names.length===0){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Nothing set as visible to you right now.</div>`;
     return;
@@ -11080,7 +11281,7 @@ async function renderViewerGrandScheduleTab(){
 
   // Grand Schedule shows the whole department-wide picture, unfiltered — this is where a
   // viewer actually sees who's working what across every team, not a personal, narrowed view.
-  const allKeys = Object.keys(groups).sort();
+  const allKeys = sortedGrandGroupKeys(groups);
 
   if(allKeys.length===0){
     wrap.innerHTML = `<div class="card"><div class="muted" style="padding:14px 2px; font-size:12.5px;">Nothing scheduled this week.</div></div>`;
