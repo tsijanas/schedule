@@ -51,6 +51,14 @@ service cloud.firestore {
         && request.auth.uid in get(/databases/$(database)/documents/access_control/managers).data.uids;
     }
 
+    // Narrower than isManagerUid: only a true org Admin. access_control/admins is kept in
+    // sync by the app (see syncManagerRoster) with whoever holds the Admin role.
+    function isAdminUid() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/access_control/admins)
+        && request.auth.uid in get(/databases/$(database)/documents/access_control/admins).data.uids;
+    }
+
     // The signed-in account's own email address, lowercased. Everything this app stores is
     // lowercased (see saveContact), but request.auth.token.email is whatever the identity
     // provider has on file — a Google account whose address is spelled with a capital letter
@@ -289,6 +297,20 @@ service cloud.firestore {
     // someone else. Reading the log is Manager/owner-only (need-to-know, per the privacy
     // team's least-access note). Nothing can ever be edited or deleted, so it stays a genuine
     // record rather than something that could be quietly rewritten after the fact.
+    // ---- Usage: whether the tool is being opened, per person.
+    // Each person's browser writes only their own row, and only an Admin (or the owner) can
+    // read them — this answers "is the team using this", and is deliberately not readable by
+    // the people's own managers, which is the line the privacy note in the app describes.
+    // Nothing here says what anyone looked at: day counts, a last-seen stamp, and how many
+    // change notifications they have unread.
+    match /usage/{memberId} {
+      allow read: if isOwner() || isAdminUid();
+      allow create, update: if isMyMemberRow(memberId)
+        && request.resource.data.memberId == memberId
+        && request.resource.data.keys().hasOnly(['memberId','lastAt','firstAt','opens','days','unread','oldestUnreadAt']);
+      allow delete: if isOwner() || isAdminUid();
+    }
+
     match /audit_log/{entryId} {
       allow create: if isApproved() && request.resource.data.actorUid == request.auth.uid;
       allow read: if isOwner() || isManagerUid();

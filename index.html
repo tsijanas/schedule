@@ -376,6 +376,18 @@
   .audit-log-who{ font-weight:700; width:100px; flex-shrink:0; }
   .audit-log-action{ font-weight:600; }
   .audit-log-detail{ font-size:11.5px; }
+  /* Usage: a row of headline numbers, then the roster sorted stalest-first. */
+  .usage-tiles{ display:flex; flex-wrap:wrap; gap:10px; }
+  .usage-tile{ background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:9px 14px; min-width:120px; }
+  .usage-tile .n{ font-family:'Fraunces',serif; font-weight:600; font-size:19px; line-height:1.2; }
+  .usage-tile .l{ font-size:11px; color:var(--ink-soft); margin-top:1px; }
+  .usage-tile.warn{ background:var(--brick-soft); border-color:var(--brick); }
+  .usage-tile.warn .n, .usage-tile.warn .l{ color:var(--brick-text); }
+  .usage-table th:not(:first-child):not(:nth-child(2)), .usage-table td:not(:first-child):not(:nth-child(2)){ text-align:center; }
+  .usage-table tr.usage-stale td{ background:rgba(255,165,128,0.10); }
+  .usage-never{ color:var(--brick-text); font-weight:700; }
+  .usage-unread{ display:inline-block; background:var(--gold); color:var(--ink); font-weight:700; font-size:11px; border-radius:10px; padding:1px 7px; }
+  .usage-role{ font-size:10px; font-weight:600; color:var(--ink-soft); background:rgba(0,70,84,0.07); border-radius:6px; padding:1px 5px; vertical-align:1px; }
   /* Schedule history: a day heading, then a line per change with the detail folded away. */
   .hist-day{ font-family:'Fraunces',serif; font-weight:600; font-size:13px; color:var(--ink-soft);
     margin:18px 0 6px; padding-bottom:5px; border-bottom:1px solid var(--line); }
@@ -907,6 +919,7 @@
     <div class="sidebar-panel admin-only" id="org-nav-box" style="display:none;">
       <div class="sidebar-section-label sidebar-title-label">Organisation</div>
       <button class="nav-item admin-only" data-tab="departments" id="nav-departments">Departments</button>
+      <button class="nav-item admin-only" data-tab="usage" id="nav-usage">Usage</button>
     </div>
 
     <div class="sidebar-panel admin-only" id="grand-nav-box" style="display:none;">
@@ -1311,6 +1324,37 @@
         <div id="ghist-wrap"></div>
         <div class="row" style="margin-top:14px;">
           <button class="btn secondary small" id="btn-ghist-more">Load older</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- USAGE — organisation-wide, Admin only -->
+    <div class="tab-panel" id="tab-usage">
+      <div class="page-head">
+        <h1>Usage</h1>
+        <p>Who is actually opening the tool, and whether the changes you send are being read.
+        Counted per person, kept for the last 120 days.</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="usage-tiles" id="usage-tiles"></div>
+          <div class="spacer"></div>
+          <button class="btn secondary small" id="btn-usage-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:12px;">
+          <input type="search" id="usage-search" placeholder="Filter by name or team" style="flex:0 1 280px; min-width:170px;">
+          <div class="spacer"></div>
+          <label class="chip-check" title="Hide anyone who has opened it in the last week"><input type="checkbox" id="usage-stale-only"> Only those not using it</label>
+          <button class="btn secondary small" id="btn-usage-copy" title="Copy as tab-separated values, ready to paste into a spreadsheet">Copy for spreadsheet</button>
+        </div>
+        <div id="usage-wrap"></div>
+        <div class="muted" style="font-size:11px; margin-top:14px; line-height:1.6;">
+          Each person's own browser records when they opened the tool — nothing about what they
+          looked at, and nothing outside this app. Counts older than 120
+          days are dropped automatically. It shows whether the tool is being used; it is not a
+          record of activity that can be relied on for anything else.
         </div>
       </div>
     </div>
@@ -2841,6 +2885,84 @@ async function logAudit(action, details){
   }catch(e){ console.warn('Could not write audit log entry (non-fatal)', e); }
 }
 
+// ---- Usage: is the tool actually being opened, and by whom ----
+// Deliberately not "sign-ins". Signing in happens once and the session then persists — nobody
+// should have to log in again to check their own week — so authentication events would show
+// almost nothing. What can be counted is an *open*: the app being loaded, or being come back
+// to after a gap long enough to count as a separate sitting.
+// One small document per person, written once per open and never per click: the day counts, a
+// last-seen stamp, and how many change notifications they have sitting unread. Each person's
+// own browser writes their own row (the rules allow nothing else), which is fine for "is this
+// being used" but means it is not tamper-proof and is not an access-security audit trail.
+const USAGE_SESSION_GAP_MS = 30 * 60 * 1000; // away this long, and coming back is a new open
+const USAGE_RETENTION_DAYS = 120;            // older day counts are dropped on the next write
+let usageLastActiveAt = 0;
+let usageNotifSnapshot = null; // last unread state written, so an unchanged one isn't rewritten
+
+// The row is read once per session and then kept in memory, and every update is applied to
+// that copy and queued behind the previous one. Re-reading per update instead would race with
+// itself: the open count and the unread count are written moments apart at boot, and whichever
+// read first would write back a copy that didn't have the other's change in it.
+let usageRow = null;                     // this session's copy of the row
+let usageQueue = Promise.resolve();      // updates apply one at a time, in order
+function usageApply(mutate){
+  if(!viewerIdentityId || !window.rotaDb) return Promise.resolve();
+  usageQueue = usageQueue.then(async ()=>{
+    try{
+      const { db, doc, getDoc, setDoc } = window.rotaDb;
+      const ref = doc(db, 'usage', viewerIdentityId);
+      if(!usageRow){
+        const snap = await getDoc(ref);
+        usageRow = (snap && snap.exists && snap.exists()) ? { ...snap.data() } : {};
+      }
+      mutate(usageRow);
+      usageRow.memberId = viewerIdentityId;
+      usageRow.lastAt = Date.now();
+      if(!usageRow.firstAt) usageRow.firstAt = usageRow.lastAt;
+      // Only the recent window is kept. This exists to show whether the tool is being used,
+      // not to keep a permanent record of when somebody was at their desk.
+      const cutoff = iso(addDays(new Date(), -USAGE_RETENTION_DAYS));
+      const days = {};
+      Object.entries(usageRow.days || {}).forEach(([d, n])=>{ if(d >= cutoff) days[d] = n; });
+      usageRow.days = days;
+      await setDoc(ref, { ...usageRow });
+    }catch(e){ console.warn('Could not record usage (non-fatal)', e); }
+  });
+  return usageQueue;
+}
+function recordUsageOpen(){
+  usageLastActiveAt = Date.now();
+  const today = iso(new Date());
+  return usageApply(row=>{
+    row.days = { ...(row.days || {}) };
+    row.days[today] = (row.days[today] || 0) + 1;
+    row.opens = (row.opens || 0) + 1;
+  });
+}
+// How many changes they've been told about and haven't opened yet, and how long the oldest has
+// been waiting. This is the one number that says whether the notifications are landing.
+async function recordUsageNotifState(notifs){
+  if(!viewerIdentityId) return;
+  const unread = (notifs || []).filter(n=> !n.read);
+  const oldestUnreadAt = unread.length ? Math.min(...unread.map(n=> n.ts || Date.now())) : 0;
+  const key = unread.length + '|' + oldestUnreadAt;
+  if(usageNotifSnapshot === key) return; // nothing changed since the last write
+  usageNotifSnapshot = key;
+  await usageApply(row=>{ row.unread = unread.length; row.oldestUnreadAt = oldestUnreadAt; });
+}
+function startUsageTracking(){
+  if(!viewerIdentityId) return;
+  recordUsageOpen();
+  if(window.__usageWired) return;
+  window.__usageWired = true;
+  // Coming back to a tab that's been sitting there for half an hour is a new sitting, not a
+  // continuation of the last one. Anything shorter is the same visit and isn't counted again.
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.visibilityState === 'hidden'){ usageLastActiveAt = Date.now(); return; }
+    if(Date.now() - usageLastActiveAt > USAGE_SESSION_GAP_MS) recordUsageOpen();
+  });
+}
+
 // ---- Schedule history ----
 // Who changed the schedule, and what changed. Every edit is recorded from saveWeek — the one
 // place a week is ever written — by diffing what was saved against what was there. That's why
@@ -4099,6 +4221,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='grand-coverage') renderGrandCoverageTab();
     if(btn.dataset.tab==='history') renderHistoryTab('team');
     if(btn.dataset.tab==='grand-history') renderHistoryTab('dept');
+    if(btn.dataset.tab==='usage') renderUsageTab({ reload:true });
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
     if(btn.dataset.tab==='grand-holidays') renderGrandHolidaysTab();
@@ -9400,6 +9523,127 @@ async function copyCoverage(scope){
 document.getElementById('btn-cov-copy').addEventListener('click', ()=> copyCoverage('team'));
 document.getElementById('btn-gcov-copy').addEventListener('click', ()=> copyCoverage('dept'));
 
+
+// ================= USAGE TAB (Admin only) =================
+// Reads every person's usage row in one go. There is one small row per person, so this is a
+// single collection read however big the organisation is.
+let usageRowsCache = null;
+function agoLabel(ts){
+  if(!ts) return 'never';
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if(mins < 2) return 'just now';
+  if(mins < 60) return mins + ' min ago';
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return hrs + (hrs===1 ? ' hour ago' : ' hours ago');
+  const days = Math.floor(hrs/24);
+  if(days < 30) return days + (days===1 ? ' day ago' : ' days ago');
+  return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric' });
+}
+// Day counts live in a map keyed by date, so a window is a sum over the keys inside it.
+function usageWindow(days, backDays){
+  const from = iso(addDays(new Date(), -(backDays-1)));
+  const inRange = Object.entries(days || {}).filter(([d])=> d >= from);
+  return { opens: inRange.reduce((s,[,n])=> s + (+n||0), 0), activeDays: inRange.filter(([,n])=> (+n||0) > 0).length };
+}
+async function loadUsageRows(){
+  const byMember = {};
+  try{
+    const { db, collection, getDocs } = window.rotaDb;
+    const snap = await getDocs(collection(db, 'usage'));
+    snap.forEach(d=>{ const v = d.data(); if(v && v.memberId) byMember[v.memberId] = v; });
+  }catch(e){
+    console.error('Could not load usage', e);
+    return null;
+  }
+  // Everyone on the roster, including the people with no row at all — those are the ones worth
+  // seeing, since a missing row means they have never opened it.
+  return state.members.map(m=>{
+    const u = byMember[m.id] || {};
+    const week = usageWindow(u.days, 7), month = usageWindow(u.days, 30);
+    return {
+      id: m.id, name: fullNameFor(m) || memberName(m.id),
+      team: (state.teams.find(t=>t.id===m.teamId)||{}).name || '—',
+      role: m.role==='admin' || m.isAdmin ? 'Admin' : m.role==='manager' ? 'Manager' : '',
+      lastAt: u.lastAt || 0, everOpened: !!u.lastAt,
+      opens7: week.opens, active7: week.activeDays, opens30: month.opens,
+      unread: u.unread || 0, oldestUnreadAt: u.oldestUnreadAt || 0,
+    };
+  });
+}
+function usageIsStale(r){ return !r.everOpened || r.active7 === 0; }
+async function renderUsageTab(opts){
+  const wrap = document.getElementById('usage-wrap');
+  if(!wrap) return;
+  if(!usageRowsCache || (opts && opts.reload)){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
+    usageRowsCache = await loadUsageRows();
+    if(!usageRowsCache){
+      wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Couldn't load this — try Refresh, or check you're still signed in as an Admin.</div>`;
+      return;
+    }
+  }
+  const rows = usageRowsCache;
+  const tiles = document.getElementById('usage-tiles');
+  if(tiles){
+    const openedThisWeek = rows.filter(r=> r.active7 > 0).length;
+    const neverOpened = rows.filter(r=> !r.everOpened).length;
+    const withUnread = rows.filter(r=> r.unread > 0).length;
+    const oldest = rows.filter(r=>r.oldestUnreadAt).map(r=>r.oldestUnreadAt);
+    tiles.innerHTML = [
+      { n: `${openedThisWeek} of ${rows.length}`, label: 'opened it this week' },
+      { n: neverOpened, label: 'never opened it', warn: neverOpened>0 },
+      { n: withUnread, label: withUnread===1 ? 'has unread changes' : 'have unread changes', warn: withUnread>0 },
+      { n: oldest.length ? agoLabel(Math.min(...oldest)) : '—', label: 'oldest unread change' },
+    ].map(t=> `<div class="usage-tile ${t.warn?'warn':''}"><div class="n">${escHtml(String(t.n))}</div><div class="l">${escHtml(t.label)}</div></div>`).join('');
+  }
+  const q = (document.getElementById('usage-search')?.value || '').trim().toLowerCase();
+  const staleOnly = !!document.getElementById('usage-stale-only')?.checked;
+  const shown = rows
+    .filter(r=> !staleOnly || usageIsStale(r))
+    .filter(r=> !q || (r.name+' '+r.team).toLowerCase().includes(q))
+    // Stalest first: the people not using it are the reason to look at this page at all.
+    .sort((a,b)=> (a.lastAt||0) - (b.lastAt||0) || a.name.localeCompare(b.name));
+  if(shown.length===0){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">${q||staleOnly ? 'Nobody matches that.' : 'Nothing recorded yet — it starts from the next time anyone opens the tool.'}</div>`;
+    return;
+  }
+  let html = `<table class="usage-table"><thead><tr>
+    <th style="text-align:left;">Person</th><th style="text-align:left;">Team</th>
+    <th>Last opened</th><th title="Days in the last 7 they opened it at least once">Days this week</th>
+    <th title="Times opened in the last 7 days">Opens (7d)</th><th title="Times opened in the last 30 days">Opens (30d)</th>
+    <th title="Change notifications sent to them that they haven't opened">Unread</th>
+  </tr></thead><tbody>`;
+  shown.forEach(r=>{
+    html += `<tr class="${usageIsStale(r)?'usage-stale':''}">
+      <td style="text-align:left; font-weight:600;">${escHtml(r.name)}${r.role?` <span class="usage-role">${escHtml(r.role)}</span>`:''}</td>
+      <td style="text-align:left;" class="muted">${escHtml(r.team)}</td>
+      <td class="${r.everOpened?'':'usage-never'}">${escHtml(agoLabel(r.lastAt))}</td>
+      <td class="mono">${r.active7||'—'}</td>
+      <td class="mono">${r.opens7||'—'}</td>
+      <td class="mono">${r.opens30||'—'}</td>
+      <td>${r.unread ? `<span class="usage-unread" title="Oldest waiting since ${escAttr(agoLabel(r.oldestUnreadAt))}">${r.unread}</span>` : '—'}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>`;
+  wrap.innerHTML = html;
+}
+function usageTsv(){
+  const rows = (usageRowsCache||[]);
+  const head = ['Person','Team','Role','Last opened','Days this week','Opens 7d','Opens 30d','Unread'];
+  const lines = rows.map(r=> [r.name, r.team, r.role, r.everOpened ? new Date(r.lastAt).toISOString() : 'never',
+    r.active7, r.opens7, r.opens30, r.unread].join('\t'));
+  return [head.join('\t'), ...lines].join('\n');
+}
+document.getElementById('btn-usage-refresh')?.addEventListener('click', ()=> renderUsageTab({ reload:true }));
+document.getElementById('usage-search')?.addEventListener('input', ()=> renderUsageTab());
+document.getElementById('usage-stale-only')?.addEventListener('change', ()=> renderUsageTab());
+document.getElementById('btn-usage-copy')?.addEventListener('click', async ()=>{
+  try{
+    await navigator.clipboard.writeText(usageTsv());
+    showToast('Copied — paste it into a spreadsheet');
+  }catch(e){ showToast("Couldn't reach the clipboard"); }
+});
+
 // ================= SCHEDULE HISTORY TAB =================
 // Reads back what saveWeek and the reordering recorded. The log itself is org-wide and
 // append-only, so this pages through it newest-first and keeps the entries belonging to the
@@ -11446,6 +11690,7 @@ function startAccessCheck(){
     await bindIdentityInFlight;
     bindIdentityInFlight = null;
     revealApp();
+    startUsageTracking(); // only now is it known whose open this is
   });
 }
 
@@ -11535,10 +11780,14 @@ function updateWhosOnNavVisibility(){
 // its own sidebar section, which has to hide along with it or a Manager would see an empty
 // "Organisation" heading with nothing under it.
 function updateDepartmentsNavVisibility(){
-  const btn = document.getElementById('nav-departments');
   const box = document.getElementById('org-nav-box');
   const isOrgAdmin = isOrgAdminViewer();
-  if(btn) btn.style.display = isOrgAdmin ? '' : 'none';
+  // Usage sits here for the same reason Departments does: it spans the whole organisation, and
+  // a Manager gets the admin UI generally but never the organisation-wide screens.
+  ['nav-departments','nav-usage'].forEach(id=>{
+    const btn = document.getElementById(id);
+    if(btn) btn.style.display = isOrgAdmin ? '' : 'none';
+  });
   if(box) box.style.display = isOrgAdmin ? '' : 'none';
 }
 let whosOnWeekMonday = null;
@@ -11609,6 +11858,7 @@ async function updateNotifRedDot(){
   if(!viewerIdentityId) return;
   const notifs = await loadMyNotifications();
   const unreadCount = notifs.filter(n=>!n.read).length;
+  recordUsageNotifState(notifs); // piggybacks on a list that's already loaded, writes only on a change
   if(dot) dot.style.display = unreadCount>0 ? 'inline-block' : 'none';
   // Dock/taskbar badge for an installed PWA — only Chrome/Edge support this today (not Safari),
   // so this is feature-detected and silently does nothing where it's unsupported.

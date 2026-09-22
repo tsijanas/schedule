@@ -10,6 +10,12 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
   repo but were never copied into the container, so the deployed site served none of them; the
   sign-in page had no manifest link at all. Both fixed, with sizes for browser tabs, iOS and
   Android, including maskable ones so a launcher's crop doesn't cut the mark.
+- **Usage (Admin only)** — a new organisation-wide tab: who has opened the tool and when, opens
+  and active days over the last week and month, who has never opened it, and who has change
+  notifications sitting unread. Counted per *open* rather than per sign-in, since the session
+  persists on purpose — nobody has to log in again to check their own week. Each person's own
+  browser records only their own row, nothing about what they looked at, and counts older than
+  120 days are dropped automatically. **Needs a rules deploy.**
 
 ---
 
