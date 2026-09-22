@@ -88,6 +88,7 @@ over `http(s)://`, even just `localhost`, which is what the Docker setup below i
 | `docker-compose.yml` | Local one-command way to run the container and check it works |
 | `tests.js` | Standalone test suite for the generator and parsers — see Testing below |
 | `manifest.json`, `icon-*.png`, `favicon*` | PWA manifest and icons, for installing as an app |
+| `tools/make-icons.mjs` | Redraws every icon file from one description of the mark — run by hand when the mark changes, and it writes `tools/icon-proof.png` alongside so the result can be checked at real sizes |
 
 ## Running it locally
 

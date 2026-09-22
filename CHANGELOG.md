@@ -5,6 +5,17 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
 
 ## Next round — starts after `0fb2952` (22 Sep 2026)
 
+- **A mark that says "schedule"** — the icon is now a week with one day marked in gold, drawn
+  in the brand slide template's expressive icon style: one stroke weight, round caps, a wide
+  corner radius and a single solid dot as the only filled detail. Same deep teal and mint the
+  template's icon page uses (`#004654`, `#EDFFE9`), which the app was already built on. Below
+  48px the calendar's two hangers come off and the strokes thicken, because at 16px they close
+  into a smudge — the template's own advice for small sizes. New `icon-mac-1024.png` is a
+  rounded tile inset in transparency, so an installed app sits in the macOS Dock at the shape
+  and size everything else there is, rather than as a full-bleed square. `tools/make-icons.mjs`
+  now also packs `favicon.ico` itself, so all eleven files come from the one description of the
+  mark, and `tools/icon-proof.png` shows every size, a tab strip and a Dock at true scale.
+
 - **App icon** — installing the tool now shows the app's own mark (the sidebar's wave and dot,
   on teal) instead of a letter on a grey square. The icons and `manifest.json` existed in the
   repo but were never copied into the container, so the deployed site served none of them; the
