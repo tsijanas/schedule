@@ -177,6 +177,10 @@
   tr:hover td{ background:rgba(192,147,42,0.05); }
 
   .req-table th:not(:first-child), .req-table td:not(:first-child){ text-align:center; }
+  /* The task column was taking whatever was left over, which on a laptop was narrow enough to
+     break the task name, its button and its chips onto a line each. Given a floor, the name
+     and button sit on one line and the availability and Override on the next. */
+  .req-table th:first-child, .req-table td:first-child{ min-width:192px; }
   .req-table .req-total-row td{ border-top:2px solid var(--line); background:rgba(192,147,42,0.06); }
   .req-table .req-team-row td{ background:rgba(23,50,58,0.02); color:var(--ink-soft); }
   .req-table .req-diff-row td{ border-top:1px solid var(--line); }
@@ -744,6 +748,11 @@
   .cov-table tr.cov-total-row td{ border-top:2px solid var(--line); border-bottom:none; font-weight:700; background:var(--paper); }
   .cov-legend{ display:flex; flex-wrap:wrap; gap:14px; align-items:center; margin-top:12px; font-size:11.5px; color:var(--ink-soft); }
   .cov-legend span.sw{ display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+  /* The task cell is the narrowest column in a table of eight, so its contents are given two
+     deliberate lines — the task and its breakdown button, then the availability and Override —
+     rather than being left to wrap into a different shape on every row. */
+  .req-task-line{ display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .req-task-sub{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:3px; font-weight:400; }
   .req-avail{ font-size:10.5px; font-weight:500; color:var(--ink-soft); background:rgba(0,70,84,0.06); border-radius:6px; padding:1px 6px; white-space:nowrap; }
   .req-avail-short{ background:var(--brick-soft); color:var(--brick-text); font-weight:700; }
   /* Moving a task row. The grip is the drag target; the arrows do the same job without a
@@ -6343,14 +6352,12 @@ function fmtReqDate(dISO){
   const d = new Date(dISO+'T00:00:00');
   return isNaN(d) ? dISO : d.toLocaleDateString('en-US', { month:'short', day:'numeric', year: d.getFullYear()!==new Date().getFullYear() ? 'numeric' : undefined });
 }
-// Replaces the old "shared with N other teams" note under a task name. How many people could
-// actually work this task in the week being looked at: eligible for it, holding a level it
-// allows, and not away for the whole week. Turns brick when the busiest day asks for more
-// than the thinnest day can supply, which is the one number that says "this can't be staffed".
-function taskAvailabilityHtml(task, row, weekMonday, pool){
-  const members = (pool || teamMembers()).filter(m=>
-    m.eligibility && m.eligibility[task.id] && levelAllowed(task, m.levels)
-    && (m.levels||[]).some(l=>LEVELS.includes(l)));
+// How many of a given set of people could actually work a task in the week being looked at:
+// eligible for it, holding a level it allows, and not away for the whole week. Turns brick when
+// the busiest day asks for more than the thinnest day can supply, which is the one number that
+// says "this can't be staffed". The chip itself stays short — the day-by-day picture is in its
+// tooltip, which is where it belongs on a table that already has seven columns of numbers.
+function availabilityChipHtml(members, row, weekMonday){
   const dates = DAYS.map((d,i)=> iso(addDays(weekMonday,i)));
   const perDay = DAYS.map((d,i)=> members.filter(m=> !isOnHoliday(m.id, dates[i])).length);
   const anyWeek = members.filter(m=> dates.some((dISO,i)=> !isOnHoliday(m.id, dISO))).length;
@@ -6360,9 +6367,30 @@ function taskAvailabilityHtml(task, row, weekMonday, pool){
   const cannotCover = biggestAsk > worst;
   const detail = DAYS.map((d,i)=> `${DAY_LABELS[d].slice(0,3)} ${perDay[i]}`).join(' · ');
   const title = cannotCover
-    ? `Asks for ${biggestAsk} on its busiest day, but only ${worst} can work the thinnest day of the week. Availability by day: ${detail}`
-    : `People who can work this task this week, by day: ${detail}`;
-  return `<span class="req-avail ${cannotCover?'req-avail-short':''}" title="${escAttr(title)}">${cannotCover?'⚠ ':''}${anyWeek} can work this</span>`;
+    ? `${anyWeek} can work this task this week. It asks for ${biggestAsk} on its busiest day, but only ${worst} can work the thinnest day of the week. Availability by day: ${detail}`
+    : `${anyWeek} can work this task this week. Availability by day: ${detail}`;
+  return `<span class="req-avail ${cannotCover?'req-avail-short':''}" title="${escAttr(title)}">${cannotCover?'⚠ ':''}${anyWeek} available</span>`;
+}
+function taskAvailabilityHtml(task, row, weekMonday, pool){
+  return availabilityChipHtml((pool || teamMembers()).filter(m=>
+    m.eligibility && m.eligibility[task.id] && levelAllowed(task, m.levels)
+    && (m.levels||[]).some(l=>LEVELS.includes(l))), row, weekMonday);
+}
+// The department-wide version. A task name is a different task row on each team, with its own
+// eligibility and its own level restriction, so the people are collected per team and unioned —
+// this is the whole department's answer to "who could work this", not one team's.
+function grandTaskAvailabilityHtml(group, row, weekMonday){
+  const seen = new Set();
+  const members = [];
+  ((group||{}).perTeam || []).forEach(({team, task})=>{
+    state.members.forEach(m=>{
+      if(m.teamId!==team.id || seen.has(m.id)) return;
+      if(!(m.eligibility && m.eligibility[task.id] && levelAllowed(task, m.levels))) return;
+      if(!(m.levels||[]).some(l=>LEVELS.includes(l))) return;
+      seen.add(m.id); members.push(m);
+    });
+  });
+  return availabilityChipHtml(members, row, weekMonday);
 }
 function renderReqTab(){
   const wrap = document.getElementById('req-table-wrap');
@@ -6392,11 +6420,13 @@ function renderReqTab(){
     const grandLocked = gLock.lockedFor(t);
     const frozen = hasBreakdown || grandLocked || past;
     html += `<tr data-task="${t.id}" class="${grandLocked?'req-row-locked':''}"><td style="font-weight:600; text-align:left;">
-      <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+      <div class="req-task-line">
         ${grandLocked?'<span title="Set from the Grand Requirement">🔒</span>':''}
         <span>${escHtml(t.name)}</span>
-        ${taskAvailabilityHtml(t, row, reqWeekMonday)}
         <button type="button" class="req-breakdown-toggle" data-task="${t.id}" ${grandLocked?'disabled title="Set from the Grand Requirement — tick Override to edit"':`title="${hasBreakdown?'Edit level breakdown':'Break this down by level'}"`}>${hasBreakdown?'⚙':'+'}</button>
+      </div>
+      <div class="req-task-sub">
+        ${taskAvailabilityHtml(t, row, reqWeekMonday)}
         ${inGrand?`<label class="req-override-label"><input type="checkbox" class="req-override-check" data-task="${t.id}" ${t.reqOverride===true?'checked':''}> Override</label>`:''}
       </div>
     </td>`;
@@ -6797,11 +6827,11 @@ async function renderGrandReqTab(){
     const breakdown = grandReqLevels[key];
     const hasBreakdown = breakdown && Object.values(breakdown).some(dayLv=> dayLv && Object.values(dayLv).some(v=>v>0));
     html += `<tr data-gkey="${escAttr(key)}"><td style="font-weight:600; text-align:left;">
-      <div style="display:flex; align-items:center; gap:6px;">
+      <div class="req-task-line">
         <span>${escHtml(g.displayName)}</span>
         <button type="button" class="req-breakdown-toggle grand-req-breakdown-toggle" data-gkey="${escAttr(key)}" title="${hasBreakdown?'Edit level breakdown':'Break this down by level'}">${hasBreakdown?'⚙':'+'}</button>
       </div>
-      <div class="muted" style="font-size:10.5px; font-weight:400;">on ${g.perTeam.length} team${g.perTeam.length===1?'':'s'}</div>
+      <div class="req-task-sub">${grandTaskAvailabilityHtml(g, savedRow, grandReqWeekMonday)}</div>
     </td>`;
     DAYS.forEach(d=>{
       const v = savedRow[d]||0;
