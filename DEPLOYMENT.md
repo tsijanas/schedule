@@ -7,6 +7,31 @@ There are two separate things to set up, and they're independent of each other:
    decision is made to replace it entirely (a much bigger separate project — see the note on
    that in the accompanying conversation/summary, not here).
 
+## Part 0 — The simplest way to deploy: Firebase Hosting
+
+The Firebase project is already there for Auth and Firestore, so it can serve the files too,
+and this needs nothing from anyone else — no container, no cluster, no pipeline:
+
+```
+firebase deploy --only hosting
+```
+
+That publishes to `https://<project>.web.app`. Both that and `<project>.firebaseapp.com` are
+already trusted by Firebase Auth, so Google sign-in works with no extra setup. `firebase.json`
+carries the same cache and security headers the nginx config does, so the behaviour matches.
+
+Deploy the rules the same way, and both together with `firebase deploy`:
+
+```
+firebase deploy --only firestore:rules
+firebase deploy                        # hosting + rules
+```
+
+A custom domain (e.g. the existing one) can be pointed at Firebase Hosting later — Hosting →
+Add custom domain — which needs a DNS record from whoever runs the domain.
+
+Everything below describes the container route, which is an alternative, not a requirement.
+
 ## Part 1 — Hosting the files on your own servers
 
 The app is packaged as a Docker container (see `Dockerfile`). Any server that can run Docker
