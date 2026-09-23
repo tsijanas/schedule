@@ -386,6 +386,9 @@
   .usage-tile.hero{ background:var(--ink); border-color:var(--ink); }
   .usage-tile.hero .n{ color:var(--sidebar-ink); font-size:30px; }
   .usage-tile.hero .l{ color:var(--sidebar-ink); opacity:0.75; }
+  .usage-setup{ background:var(--brick-soft); color:var(--brick-text); border:1px solid var(--brick);
+    border-radius:12px; padding:12px 14px; margin-bottom:20px; font-size:12.5px; line-height:1.65; }
+  .usage-setup code{ background:rgba(0,0,0,0.07); border-radius:5px; padding:1px 5px; font-size:12px; }
   .usage-chart-host{ position:relative; }
   .usage-chart{ width:100%; height:210px; display:block; overflow:visible; }
   .usage-axis{ font-size:9px; fill:var(--ink-faint); font-family:'Inter',system-ui,sans-serif; }
@@ -1351,6 +1354,7 @@
         <p>Who is actually opening the tool, and whether the changes you send are being read.
         Counted per person, kept for the last 120 days.</p>
       </div>
+      <div id="usage-setup-note"></div>
       <div class="card">
         <div class="row" style="align-items:flex-start;">
           <div class="usage-tiles" id="usage-tiles"></div>
@@ -2925,6 +2929,7 @@ const USAGE_DAY_CHECK_MS = 5 * 60 * 1000;    // how often an open tab checks whe
 let usageLastActiveAt = 0;
 let usageLastOpenDay = null;   // the day the last open was recorded against
 let usageNotifSnapshot = null; // last unread state written, so an unchanged one isn't rewritten
+let usageWriteError = null;    // why the last write failed, for the Usage tab to explain itself
 
 // The row is read once per session and then kept in memory, and every update is applied to
 // that copy and queued behind the previous one. Re-reading per update instead would race with
@@ -2953,7 +2958,11 @@ function usageApply(mutate){
       Object.entries(usageRow.days || {}).forEach(([d, n])=>{ if(d >= cutoff) days[d] = n; });
       usageRow.days = days;
       await setDoc(ref, { ...usageRow });
-    }catch(e){ console.warn('Could not record usage (non-fatal)', e); }
+      usageWriteError = null;
+    }catch(e){
+      usageWriteError = (e && (e.code || e.message)) || 'unknown';
+      console.warn('Could not record usage (non-fatal)', e);
+    }
   });
   return usageQueue;
 }
@@ -9685,13 +9694,16 @@ function usageWindow(days, backDays){
   const inRange = Object.entries(days || {}).filter(([d])=> d >= from);
   return { opens: inRange.reduce((s,[,n])=> s + (+n||0), 0), activeDays: inRange.filter(([,n])=> (+n||0) > 0).length };
 }
+let usageReadError = null;
 async function loadUsageRows(){
   const byMember = {};
+  usageReadError = null;
   try{
     const { db, collection, getDocs } = window.rotaDb;
     const snap = await getDocs(collection(db, 'usage'));
     snap.forEach(d=>{ const v = d.data(); if(v && v.memberId) byMember[v.memberId] = v; });
   }catch(e){
+    usageReadError = (e && (e.code || e.message)) || 'unknown';
     console.error('Could not load usage', e);
     return null;
   }
@@ -9719,11 +9731,29 @@ async function renderUsageTab(opts){
     wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
     usageRowsCache = await loadUsageRows();
     if(!usageRowsCache){
-      wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Couldn't load this — try Refresh, or check you're still signed in as an Admin.</div>`;
+      wrap.innerHTML = String(usageReadError||'').includes('permission')
+        ? `<div class="usage-setup"><strong>The usage rules aren't live yet.</strong>
+             Firestore refused to read this collection, which means the new security rules
+             haven't been deployed. Run <code>firebase deploy --only firestore:rules</code> —
+             until then nothing is being recorded either.</div>`
+        : `<div class="muted" style="font-size:12.5px;">Couldn't load this — try Refresh, or check you're still signed in as an Admin.</div>`;
       return;
     }
   }
   const rows = usageRowsCache;
+  // If nobody has ever been recorded — including whoever is reading this page, who by
+  // definition just opened the tool — that isn't an empty roster, it's writes being refused.
+  const setupNote = document.getElementById('usage-setup-note');
+  if(setupNote){
+    const nobodyAtAll = rows.length > 0 && rows.every(r=> !r.everOpened);
+    setupNote.innerHTML = (nobodyAtAll || usageWriteError)
+      ? `<div class="usage-setup"><strong>Nothing is being recorded.</strong>
+           Opening this page is itself an open, so at the very least your own row should be here.
+           The usual cause is that the new security rules haven't been deployed — run
+           <code>firebase deploy --only firestore:rules</code>, then reload.
+           ${usageWriteError ? `<span class="muted">Last write failed: ${escHtml(String(usageWriteError))}.</span>` : ''}</div>`
+      : '';
+  }
   const series = usageDailySeries(rows, 30);
   const today = series[series.length-1] || { people:0 };
   const last7 = series.slice(-7);
