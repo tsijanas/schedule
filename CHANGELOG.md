@@ -19,6 +19,11 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
   average over the week, the busiest day, how many of the roster used it in the last 30 days —
   and a day-by-day chart of unique people per the last 30 days, weekends shaded, with the
   roster underneath. **Needs a rules deploy.**
+- **Google sign-in fixed after the header change broke it** — the same fix below meant the
+  Content-Security-Policy reached an HTML page for the first time, and it was missing a host
+  the Firebase auth SDK needs (`apis.google.com`, which it injects to run its auth iframe and
+  then asserts on, throwing `auth/internal-error`). The missing hosts are added, and the policy
+  now reports rather than blocks until it has been exercised against the real sign-in flow.
 - **Deploys show up without a hard refresh, and keep their security headers** — the bare domain
   had no cache rule at all, so browsers were free to decide how long to hold the old app. And
   the rule that stopped `.html` being cached was silently dropping the CSP, X-Frame-Options,
