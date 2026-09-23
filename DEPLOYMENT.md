@@ -28,6 +28,11 @@ your infrastructure normally uses for TLS/HTTPS and your actual domain name (a r
 load balancer, or however your team normally terminates HTTPS) — that part follows your
 existing standards, nothing specific to this app.
 
+**Checking which build is actually live:** open `https://<your-domain>/version.txt`. It names the
+build and what went into it. If it 404s, or the label is older than the one in the repo, the
+deploy did not land — and whatever else looks wrong is probably that, not the thing you are
+chasing.
+
 **One important follow-up step once you know the real domain:** see "Restrict the API key"
 below — this needs updating to whatever domain the site ends up on.
 

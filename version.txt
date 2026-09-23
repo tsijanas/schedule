@@ -1,0 +1,6 @@
+build: 2026-09-23a
+includes:
+  - app icon + manifest actually shipped in the image
+  - cache headers (deploys visible without a hard refresh) and the security headers restored
+  - Google sign-in fix: apis.google.com allowed; CSP set to report-only until verified
+  - Usage tab (Admin only) with the 30-day chart

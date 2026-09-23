@@ -16,6 +16,12 @@ COPY login.html /usr/share/nginx/html/login.html
 # The web app manifest and the icons. Without these the install prompt has no icon to use and
 # the browser falls back to drawing the first letter of the name on a plain square — which is
 # what "add to home screen" produced for as long as only the two HTML files were copied in.
+# Which build this image is. The deploy pipeline has failed in ways that left an older image
+# serving while the repo looked up to date, and the only way to tell was to read a response
+# header in DevTools. Opening /version.txt answers it in one look. It is a hand-maintained
+# label rather than a commit hash, because a file cannot contain the hash of the commit that
+# adds it — bump it whenever a change needs to be seen as deployed.
+COPY version.txt /usr/share/nginx/html/version.txt
 COPY manifest.json /usr/share/nginx/html/manifest.json
 COPY favicon.ico favicon.svg favicon-16x16.png favicon-32x32.png favicon-48.png \
      apple-touch-icon.png \
