@@ -8149,17 +8149,57 @@ document.getElementById('grand-wk-next').addEventListener('click', ()=>{ grandWe
 // which would otherwise silently overwrite the *hidden* team-level tab with the wrong team's
 // data — the real context is always restored, and the real grid is always redrawn afterward
 // to guarantee it never ends up showing borrowed data.
-async function withBorrowedTeamContext(teamId, weekMonday, fn){
-  const realTeamId = currentTeamId, realWeekMonday = currentWeekMonday, realSchedule = currentSchedule;
+// Borrowing another team's context means writing the one set of globals the whole app reads
+// (currentTeamId / currentWeekMonday / currentSchedule) and putting them back afterwards.
+// Each borrower saving its own "before" value only works while borrows happen one at a time.
+// Grand Schedule builds all its rows at once, so two of them overlap: the second captures the
+// first one's BORROWED team as though it were the real one, and whichever finishes last
+// restores that. The app is then left pointing at a team the user never picked, and the next
+// thing they open — People, Tasks, or a save — quietly acts on that team instead.
+//
+// Two things therefore have to hold at once:
+//   - a borrow nested inside another (OOO cover looks across the department from inside a
+//     borrow of the absent person's own team) must hand back to its PARENT, not to the top;
+//   - the last borrow of an overlapping batch must hand back to the REAL context, never to a
+//     sibling's borrowed one.
+// Each borrow gets its own frame rather than a shared stack, so both hold, and all four
+// orderings of two overlapping borrows finish correctly. (Overlapping borrowers must still
+// not await *inside* fn while relying on these globals — today's callers either pass a
+// preloaded schedule or run one at a time.)
+let activeBorrows = 0;
+let realTeamContext = null;
+function snapshotTeamContext(){
+  return { teamId: currentTeamId, weekMonday: currentWeekMonday, schedule: currentSchedule };
+}
+function restoreTeamContext(ctx){
+  currentTeamId = ctx.teamId;
+  currentWeekMonday = ctx.weekMonday;
+  currentSchedule = ctx.schedule;
+}
+function beginBorrowedContext(teamId, weekMonday){
+  const frame = { parent: activeBorrows > 0 ? snapshotTeamContext() : null };
+  if(activeBorrows === 0) realTeamContext = snapshotTeamContext();
+  activeBorrows++;
   currentTeamId = teamId;
   currentWeekMonday = weekMonday;
+  return frame;
+}
+function endBorrowedContext(frame){
+  activeBorrows = Math.max(0, activeBorrows - 1);
+  if(activeBorrows === 0){
+    if(realTeamContext) restoreTeamContext(realTeamContext);
+    realTeamContext = null;
+  } else if(frame && frame.parent){
+    restoreTeamContext(frame.parent);
+  }
+}
+async function withBorrowedTeamContext(teamId, weekMonday, fn){
+  const frame = beginBorrowedContext(teamId, weekMonday);
   currentSchedule = await loadWeek(iso(weekMonday));
   try{
     return await fn();
   } finally {
-    currentTeamId = realTeamId;
-    currentWeekMonday = realWeekMonday;
-    currentSchedule = realSchedule;
+    endBorrowedContext(frame);
     // Best-effort sync of the regular Schedule tab's grid, in case it's the one currently
     // visible — but this is a convenience, not the actual result of the operation above, so
     // it must never be allowed to throw and hide the fact that fn() already succeeded (this
@@ -8176,16 +8216,12 @@ async function withBorrowedTeamContext(teamId, weekMonday, fn){
 // work out the "+" dropdown's options, so without it a 12-task, 3-team department re-fetched
 // the same 3 documents 36 times to render one screen.
 async function readWithBorrowedTeamContext(teamId, weekMonday, fn, preloadedSchedule){
-  const realTeamId = currentTeamId, realWeekMonday = currentWeekMonday, realSchedule = currentSchedule;
-  currentTeamId = teamId;
-  currentWeekMonday = weekMonday;
+  const frame = beginBorrowedContext(teamId, weekMonday);
   currentSchedule = preloadedSchedule || await loadWeek(iso(weekMonday));
   try{
     return await fn();
   } finally {
-    currentTeamId = realTeamId;
-    currentWeekMonday = realWeekMonday;
-    currentSchedule = realSchedule;
+    endBorrowedContext(frame);
   }
 }
 // Loads a specific team's schedule directly, independent of the currentTeamId-scoped cache
