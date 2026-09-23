@@ -31,6 +31,9 @@ COPY favicon.ico favicon.svg favicon-16x16.png favicon-32x32.png favicon-48.png 
 # Custom nginx config: sensible caching + basic security headers
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 3000
+# Adds IPv6 listening at startup, only on pods that have IPv6 (see the script for why).
+COPY docker-entrypoint.d/11-listen-ipv6.sh /docker-entrypoint.d/11-listen-ipv6.sh
+
+EXPOSE 3000 80
 
 # nginx's official image already runs the server as its entrypoint — nothing else to do.

@@ -1,4 +1,4 @@
-build: 2026-09-23c
+build: 2026-09-23d
 includes:
   - app icon + manifest actually shipped in the image
   - cache headers (deploys visible without a hard refresh) and the security headers restored
@@ -6,3 +6,4 @@ includes:
   - Usage tab (Admin only) with the 30-day chart
   - usage recording works for everyone, not just Admins (needs the matching rules deploy)
   - keepalive raised past the proxy's idle timeout; /healthz /health /readyz answer 200
+  - answers on port 80 as well as 3000; IPv6 added at startup when the pod has it
