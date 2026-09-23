@@ -304,7 +304,12 @@ service cloud.firestore {
     // Nothing here says what anyone looked at: day counts, a last-seen stamp, and how many
     // change notifications they have unread.
     match /usage/{memberId} {
-      allow read: if isOwner() || isAdminUid();
+      // A person can read their own row, and that is load-bearing, not a courtesy: the client
+      // reads the row before writing it, to add to the day's count and drop the days that have
+      // aged out. Without this, every write by anyone who isn't an Admin failed on the read and
+      // nothing they did was ever recorded — while Admins, who could read, recorded fine.
+      // It is their own data; only an Admin can read anybody else's.
+      allow read: if isOwner() || isAdminUid() || isMyMemberRow(memberId);
       allow create, update: if isMyMemberRow(memberId)
         && request.resource.data.memberId == memberId
         && request.resource.data.keys().hasOnly(['memberId','lastAt','firstAt','opens','days','unread','oldestUnreadAt']);

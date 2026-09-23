@@ -2930,6 +2930,7 @@ let usageLastActiveAt = 0;
 let usageLastOpenDay = null;   // the day the last open was recorded against
 let usageNotifSnapshot = null; // last unread state written, so an unchanged one isn't rewritten
 let usageWriteError = null;    // why the last write failed, for the Usage tab to explain itself
+let usageReadFailed = false;   // the row couldn't be read, so writes merge instead of replacing
 
 // The row is read once per session and then kept in memory, and every update is applied to
 // that copy and queued behind the previous one. Re-reading per update instead would race with
@@ -2944,8 +2945,25 @@ function usageApply(mutate){
       const { db, doc, getDoc, setDoc } = window.rotaDb;
       const ref = doc(db, 'usage', viewerIdentityId);
       if(!usageRow){
-        const snap = await getDoc(ref);
-        usageRow = (snap && snap.exists && snap.exists()) ? { ...snap.data() } : {};
+        // A read that fails must not take the write with it. It did once — the rules let only
+        // an Admin read these rows, so everyone else's read threw and nothing they did was
+        // ever recorded. The rules allow reading your own row now, but if this ever fails
+        // again, record the day as a merge rather than losing the visit entirely: the day's
+        // key is set rather than incremented, and the other days are left alone.
+        try{
+          const snap = await getDoc(ref);
+          usageRow = (snap && snap.exists && snap.exists()) ? { ...snap.data() } : {};
+        }catch(readErr){
+          console.warn('Could not read the usage row; recording this day only', readErr);
+          usageReadFailed = true;
+          usageRow = {};
+        }
+      }
+      if(usageReadFailed){
+        mutate(usageRow);
+        await setDoc(ref, { memberId: viewerIdentityId, lastAt: Date.now(), days: usageRow.days || {} }, { merge: true });
+        usageWriteError = null;
+        return;
       }
       mutate(usageRow);
       usageRow.memberId = viewerIdentityId;
