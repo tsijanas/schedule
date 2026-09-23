@@ -16,6 +16,12 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
   persists on purpose — nobody has to log in again to check their own week. Each person's own
   browser records only their own row, nothing about what they looked at, and counts older than
   120 days are dropped automatically. **Needs a rules deploy.**
+- **Deploys show up without a hard refresh, and keep their security headers** — the bare domain
+  had no cache rule at all, so browsers were free to decide how long to hold the old app. And
+  the rule that stopped `.html` being cached was silently dropping the CSP, X-Frame-Options,
+  nosniff and Referrer-Policy from every HTML response, because an `add_header` inside a
+  location replaces the inherited ones instead of adding to them. Both now set through
+  `expires`, which leaves the security headers in place.
 
 ---
 
