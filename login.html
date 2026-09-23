@@ -82,8 +82,14 @@
   </button>
 
   <div class="error" id="form-error"></div>
+  <div class="build-label">build 2026-09-23a</div>
 </div>
 
+<style>
+  /* Which build is serving has been the hard question in every problem this week, and it was
+     only answerable by reading a response header in DevTools. It is on the page now. */
+  .build-label{ margin-top:18px; font-size:10.5px; color:var(--ink-faint); letter-spacing:0.02em; }
+</style>
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
   import {
@@ -143,8 +149,19 @@
       window.location.replace('index.html');
     }catch(err){
       console.error(err);
+      // auth/internal-error is what the SDK throws when its own helper script never loaded:
+      // it injects https://apis.google.com/js/api.js to run the auth iframe, then asserts the
+      // resulting `gapi` global exists. If that global is missing, the script was blocked —
+      // a Content-Security-Policy that doesn't allow apis.google.com, which in practice means
+      // an older build of this site is still being served. Saying so beats printing a code.
+      const gapiMissing = err.code === 'auth/internal-error' && typeof window.gapi === 'undefined';
       const msg = friendlyError(err.code);
-      if(msg){
+      if(gapiMissing){
+        errorBox.textContent = "Sign-in can't load Google's script (apis.google.com is being blocked by "
+          + "this site's security policy). This build is 2026-09-23a — if that isn't the newest one, the "
+          + "server is still serving an older image and needs redeploying.";
+        errorBox.classList.add('show');
+      } else if(msg){
         const knownCode = err.code in {'auth/popup-blocked':1,'auth/network-request-failed':1};
         errorBox.textContent = knownCode ? msg : `${msg} (${err.code || 'unknown error'})`;
         errorBox.classList.add('show');
