@@ -2921,7 +2921,9 @@ async function logAudit(action, details){
 // being used" but means it is not tamper-proof and is not an access-security audit trail.
 const USAGE_SESSION_GAP_MS = 30 * 60 * 1000; // away this long, and coming back is a new open
 const USAGE_RETENTION_DAYS = 120;            // older day counts are dropped on the next write
+const USAGE_DAY_CHECK_MS = 5 * 60 * 1000;    // how often an open tab checks whether the date rolled over
 let usageLastActiveAt = 0;
+let usageLastOpenDay = null;   // the day the last open was recorded against
 let usageNotifSnapshot = null; // last unread state written, so an unchanged one isn't rewritten
 
 // The row is read once per session and then kept in memory, and every update is applied to
@@ -2958,6 +2960,7 @@ function usageApply(mutate){
 function recordUsageOpen(){
   usageLastActiveAt = Date.now();
   const today = iso(new Date());
+  usageLastOpenDay = today;
   return usageApply(row=>{
     row.days = { ...(row.days || {}) };
     row.days[today] = (row.days[today] || 0) + 1;
@@ -2986,6 +2989,13 @@ function startUsageTracking(){
     if(document.visibilityState === 'hidden'){ usageLastActiveAt = Date.now(); return; }
     if(Date.now() - usageLastActiveAt > USAGE_SESSION_GAP_MS) recordUsageOpen();
   });
+  // A tab that is simply never closed would otherwise record one open and then look idle for
+  // the rest of the week: nothing hides it, so the check above never fires. Once the date has
+  // rolled over, the next glance at a still-open tab is a new day's use and counts as one.
+  setInterval(()=>{
+    if(document.visibilityState !== 'visible') return;
+    if(usageLastOpenDay && usageLastOpenDay !== iso(new Date())) recordUsageOpen();
+  }, USAGE_DAY_CHECK_MS);
 }
 
 // ---- Schedule history ----
