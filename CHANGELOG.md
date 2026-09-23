@@ -15,7 +15,10 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
   notifications sitting unread. Counted per *open* rather than per sign-in, since the session
   persists on purpose — nobody has to log in again to check their own week. Each person's own
   browser records only their own row, nothing about what they looked at, and counts older than
-  120 days are dropped automatically. **Needs a rules deploy.**
+  120 days are dropped automatically. It leads with the numbers — people today, the daily
+  average over the week, the busiest day, how many of the roster used it in the last 30 days —
+  and a day-by-day chart of unique people per the last 30 days, weekends shaded, with the
+  roster underneath. **Needs a rules deploy.**
 - **Deploys show up without a hard refresh, and keep their security headers** — the bare domain
   had no cache rule at all, so browsers were free to decide how long to hold the old app. And
   the rule that stopped `.html` being cached was silently dropping the CSP, X-Frame-Options,

@@ -377,12 +377,28 @@
   .audit-log-action{ font-weight:600; }
   .audit-log-detail{ font-size:11.5px; }
   /* Usage: a row of headline numbers, then the roster sorted stalest-first. */
-  .usage-tiles{ display:flex; flex-wrap:wrap; gap:10px; }
+  .usage-tiles{ display:flex; flex-wrap:wrap; gap:10px; flex:1 1 320px; min-width:0; }
   .usage-tile{ background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:9px 14px; min-width:120px; }
   .usage-tile .n{ font-family:'Fraunces',serif; font-weight:600; font-size:19px; line-height:1.2; }
   .usage-tile .l{ font-size:11px; color:var(--ink-soft); margin-top:1px; }
   .usage-tile.warn{ background:var(--brick-soft); border-color:var(--brick); }
   .usage-tile.warn .n, .usage-tile.warn .l{ color:var(--brick-text); }
+  .usage-tile.hero{ background:var(--ink); border-color:var(--ink); }
+  .usage-tile.hero .n{ color:var(--sidebar-ink); font-size:30px; }
+  .usage-tile.hero .l{ color:var(--sidebar-ink); opacity:0.75; }
+  .usage-chart-host{ position:relative; }
+  .usage-chart{ width:100%; height:210px; display:block; overflow:visible; }
+  .usage-axis{ font-size:9px; fill:var(--ink-faint); font-family:'Inter',system-ui,sans-serif; }
+  .usage-point-label{ font-size:10px; font-weight:700; fill:var(--ink-soft); font-family:'Inter',system-ui,sans-serif; }
+  .usage-bar{ cursor:default; outline:none; }
+  .usage-bar .usage-bar-mark{ transition:fill 0.1s; }
+  .usage-bar:hover .usage-bar-mark, .usage-bar.on .usage-bar-mark, .usage-bar:focus-visible .usage-bar-mark{ filter:brightness(1.55); }
+  .usage-bar:focus-visible .usage-bar-hit{ stroke:var(--ink); stroke-width:1.5; }
+  .usage-tip{ position:absolute; z-index:5; background:var(--ink); color:var(--sidebar-ink); border-radius:10px;
+    padding:6px 10px; pointer-events:none; box-shadow:var(--shadow); min-width:74px; }
+  .usage-tip-v{ font-family:'Fraunces',serif; font-weight:600; font-size:18px; line-height:1.1; }
+  .usage-tip-l{ font-size:10.5px; opacity:0.85; }
+  .usage-tip-d{ font-size:10px; opacity:0.7; margin-top:2px; }
   .usage-table th:not(:first-child):not(:nth-child(2)), .usage-table td:not(:first-child):not(:nth-child(2)){ text-align:center; }
   .usage-table tr.usage-stale td{ background:rgba(255,165,128,0.10); }
   .usage-never{ color:var(--brick-text); font-weight:700; }
@@ -1336,10 +1352,19 @@
         Counted per person, kept for the last 120 days.</p>
       </div>
       <div class="card">
-        <div class="row">
+        <div class="row" style="align-items:flex-start;">
           <div class="usage-tiles" id="usage-tiles"></div>
           <div class="spacer"></div>
           <button class="btn secondary small" id="btn-usage-refresh">Refresh</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row" style="margin-bottom:6px;">
+          <h3 style="margin:0; font-size:15px;">People per day</h3>
+          <span class="muted" style="font-size:11.5px;">— how many different people opened it, last 30 days. Shaded columns are weekends.</span>
+        </div>
+        <div class="usage-chart-host" id="usage-chart">
+          <div class="usage-tip" style="display:none;"></div>
         </div>
       </div>
       <div class="card">
@@ -9528,6 +9553,111 @@ document.getElementById('btn-gcov-copy').addEventListener('click', ()=> copyCove
 // Reads every person's usage row in one go. There is one small row per person, so this is a
 // single collection read however big the organisation is.
 let usageRowsCache = null;
+// ---- The 30-day picture ----
+// One count per day: how many different people opened the tool. Built from the same day
+// maps the table reads, so the chart and the roster can never disagree.
+function usageDailySeries(rows, backDays){
+  const out = [];
+  for(let i = backDays - 1; i >= 0; i--){
+    const date = iso(addDays(new Date(), -i));
+    let people = 0, opens = 0;
+    (rows||[]).forEach(r=>{
+      const n = (r.days || {})[date] || 0;
+      if(n > 0){ people++; opens += n; }
+    });
+    out.push({ date, people, opens });
+  }
+  return out;
+}
+// A clean top tick: the axis carries the values the columns aren't labelled with, so it
+// wants round numbers rather than whatever the busiest day happened to be.
+function usageNiceMax(n){
+  if(n <= 4) return 4;
+  if(n <= 10) return Math.ceil(n/2)*2;
+  if(n <= 50) return Math.ceil(n/5)*5;
+  return Math.ceil(n/10)*10;
+}
+function usageChartSvg(series, width){
+  // Drawn at the host's real pixel width rather than a fixed viewBox stretched to fit:
+  // with preserveAspectRatio="none" a mismatch stretches the text along with the bars.
+  const W = Math.max(420, Math.round(width || 960)), H = 210, padL = 34, padR = 10, padT = 18, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const max = usageNiceMax(Math.max(1, ...series.map(d=>d.people)));
+  const band = plotW / series.length;
+  const barW = Math.min(24, band - 2);              // the 2px gap between neighbours is surface
+  const y = v => padT + plotH - (v / max) * plotH;
+  // Rounded at the data end, square where it meets the baseline — a fully rounded foot makes
+  // a column look like it floats above the axis.
+  const column = (x, top, w, h)=>{
+    const r = Math.min(4, w/2, h), base = top + h;
+    return `M${x} ${base} L${x} ${top+r} Q${x} ${top} ${x+r} ${top} L${x+w-r} ${top} Q${x+w} ${top} ${x+w} ${top+r} L${x+w} ${base} Z`;
+  };
+  const peakValue = Math.max(...series.map(d=>d.people));
+  const peakIdx = series.findIndex(d=> d.people === peakValue);
+  let svg = `<svg class="usage-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+    aria-label="People who opened the tool each day for the last ${series.length} days">`;
+  // Weekends as a background band: context, not data ink.
+  series.forEach((d,i)=>{
+    const dow = new Date(d.date+'T00:00:00').getDay();
+    if(dow===0 || dow===6) svg += `<rect x="${(padL + i*band).toFixed(1)}" y="${padT}" width="${band.toFixed(1)}" height="${plotH}" fill="rgba(0,70,84,0.045)"/>`;
+  });
+  [0, max/2, max].forEach(v=>{
+    svg += `<line x1="${padL}" x2="${W-padR}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`;
+    svg += `<text x="${padL-7}" y="${(y(v)+3.5).toFixed(1)}" text-anchor="end" class="usage-axis">${v}</text>`;
+  });
+  series.forEach((d,i)=>{
+    const x = padL + i*band + (band - barW)/2;
+    const h = d.people === 0 ? 0 : Math.max(2, padT + plotH - y(d.people));
+    const label = `${new Date(d.date+'T00:00:00').toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'})}: ${d.people} ${d.people===1?'person':'people'}, ${d.opens} ${d.opens===1?'open':'opens'}`;
+    svg += `<g class="usage-bar" tabindex="0" role="listitem" data-i="${i}">
+      <title>${escHtml(label)}</title>
+      <rect class="usage-bar-hit" x="${(padL + i*band).toFixed(1)}" y="${padT}" width="${band.toFixed(1)}" height="${plotH}" fill="transparent"/>
+      ${h ? `<path class="usage-bar-mark" d="${column(+x.toFixed(1), +y(d.people).toFixed(1), +barW.toFixed(1), +h.toFixed(1))}" fill="var(--ink)"/>` : ''}
+    </g>`;
+  });
+  // Labelled selectively: the busiest day and today. Everything else is on the axis and in
+  // the tooltip, because a number over every column is noise.
+  [[peakIdx,'peak'], [series.length-1,'today']].forEach(([i, kind])=>{
+    const d = series[i];
+    if(!d || !d.people || (kind==='today' && i===peakIdx)) return;
+    svg += `<text x="${(padL + i*band + band/2).toFixed(1)}" y="${(y(d.people)-6).toFixed(1)}" text-anchor="middle" class="usage-point-label">${d.people}</text>`;
+  });
+  // Dates: first, last and every seventh, so they never collide.
+  const lastIdx = series.length - 1;
+  series.forEach((d,i)=>{
+    if(i!==0 && i!==lastIdx && i % 7 !== 0) return;
+    if(i!==lastIdx && lastIdx - i < 3) return; // would collide with the last date
+    const dt = new Date(d.date+'T00:00:00');
+    svg += `<text x="${(padL + i*band + band/2).toFixed(1)}" y="${H-8}" text-anchor="middle" class="usage-axis">${dt.getDate()} ${dt.toLocaleDateString('en-US',{month:'short'})}</text>`;
+  });
+  svg += `</svg>`;
+  return svg;
+}
+function wireUsageChart(host, series){
+  const tip = host.querySelector('.usage-tip');
+  const show = (g)=>{
+    const d = series[+g.dataset.i];
+    if(!d || !tip) return;
+    const dt = new Date(d.date+'T00:00:00');
+    tip.innerHTML = `<div class="usage-tip-v">${d.people}</div>
+      <div class="usage-tip-l">${escHtml(d.people===1?'person':'people')} · ${d.opens} ${escHtml(d.opens===1?'open':'opens')}</div>
+      <div class="usage-tip-d">${escHtml(dt.toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'}))}</div>`;
+    const hostBox = host.getBoundingClientRect(), markBox = g.getBoundingClientRect();
+    tip.style.display = 'block';
+    const left = markBox.left - hostBox.left + markBox.width/2 - tip.offsetWidth/2;
+    tip.style.left = Math.max(2, Math.min(hostBox.width - tip.offsetWidth - 2, left)) + 'px';
+    tip.style.top = Math.max(0, markBox.top - hostBox.top - tip.offsetHeight - 6) + 'px';
+    g.classList.add('on');
+  };
+  const hide = (g)=>{ if(tip) tip.style.display='none'; g && g.classList.remove('on'); };
+  host.querySelectorAll('.usage-bar').forEach(g=>{
+    g.addEventListener('pointerenter', ()=> show(g));
+    g.addEventListener('pointerleave', ()=> hide(g));
+    g.addEventListener('focus', ()=> show(g));   // the same readout on keyboard focus
+    g.addEventListener('blur', ()=> hide(g));
+  });
+}
+
 function agoLabel(ts){
   if(!ts) return 'never';
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -9564,6 +9694,7 @@ async function loadUsageRows(){
       id: m.id, name: fullNameFor(m) || memberName(m.id),
       team: (state.teams.find(t=>t.id===m.teamId)||{}).name || '—',
       role: m.role==='admin' || m.isAdmin ? 'Admin' : m.role==='manager' ? 'Manager' : '',
+      days: u.days || {},
       lastAt: u.lastAt || 0, everOpened: !!u.lastAt,
       opens7: week.opens, active7: week.activeDays, opens30: month.opens,
       unread: u.unread || 0, oldestUnreadAt: u.oldestUnreadAt || 0,
@@ -9583,18 +9714,40 @@ async function renderUsageTab(opts){
     }
   }
   const rows = usageRowsCache;
+  const series = usageDailySeries(rows, 30);
+  const today = series[series.length-1] || { people:0 };
+  const last7 = series.slice(-7);
+  const avg7 = last7.length ? Math.round(last7.reduce((s,d)=> s+d.people, 0) / last7.length * 10) / 10 : 0;
+  const peak = series.reduce((best,d)=> d.people > best.people ? d : best, series[0] || {people:0, date:''});
+  const reached30 = rows.filter(r=> Object.keys(r.days||{}).some(d=> d >= iso(addDays(new Date(), -29)))).length;
   const tiles = document.getElementById('usage-tiles');
   if(tiles){
-    const openedThisWeek = rows.filter(r=> r.active7 > 0).length;
     const neverOpened = rows.filter(r=> !r.everOpened).length;
     const withUnread = rows.filter(r=> r.unread > 0).length;
-    const oldest = rows.filter(r=>r.oldestUnreadAt).map(r=>r.oldestUnreadAt);
     tiles.innerHTML = [
-      { n: `${openedThisWeek} of ${rows.length}`, label: 'opened it this week' },
+      { n: today.people, label: 'people today', hero: true },
+      { n: avg7, label: 'a day, average over the week' },
+      { n: peak.people ? `${peak.people}` : '—', label: peak.people ? `busiest day — ${new Date(peak.date+'T00:00:00').toLocaleDateString('en-US',{month:'short', day:'numeric'})}` : 'busiest day' },
+      { n: `${reached30} of ${rows.length}`, label: 'used it in the last 30 days' },
       { n: neverOpened, label: 'never opened it', warn: neverOpened>0 },
       { n: withUnread, label: withUnread===1 ? 'has unread changes' : 'have unread changes', warn: withUnread>0 },
-      { n: oldest.length ? agoLabel(Math.min(...oldest)) : '—', label: 'oldest unread change' },
-    ].map(t=> `<div class="usage-tile ${t.warn?'warn':''}"><div class="n">${escHtml(String(t.n))}</div><div class="l">${escHtml(t.label)}</div></div>`).join('');
+    ].map(t=> `<div class="usage-tile ${t.warn?'warn':''} ${t.hero?'hero':''}"><div class="n">${escHtml(String(t.n))}</div><div class="l">${escHtml(t.label)}</div></div>`).join('');
+  }
+  const chartHost = document.getElementById('usage-chart');
+  if(chartHost){
+    const draw = ()=>{
+      chartHost.innerHTML = `<div class="usage-tip" style="display:none;"></div>` + usageChartSvg(series, chartHost.clientWidth);
+      wireUsageChart(chartHost, series);
+    };
+    draw();
+    if(!window.__usageResizeWired){
+      window.__usageResizeWired = true;
+      let t = null;
+      window.addEventListener('resize', ()=>{
+        clearTimeout(t);
+        t = setTimeout(()=>{ if(document.getElementById('tab-usage')?.classList.contains('active')) renderUsageTab(); }, 150);
+      });
+    }
   }
   const q = (document.getElementById('usage-search')?.value || '').trim().toLowerCase();
   const staleOnly = !!document.getElementById('usage-stale-only')?.checked;
@@ -9632,7 +9785,11 @@ function usageTsv(){
   const head = ['Person','Team','Role','Last opened','Days this week','Opens 7d','Opens 30d','Unread'];
   const lines = rows.map(r=> [r.name, r.team, r.role, r.everOpened ? new Date(r.lastAt).toISOString() : 'never',
     r.active7, r.opens7, r.opens30, r.unread].join('\t'));
-  return [head.join('\t'), ...lines].join('\n');
+  // The chart's own numbers go in the same copy — every plotted value stays reachable
+  // without hovering over it.
+  const daily = usageDailySeries(rows, 30)
+    .map(d=> [d.date, d.people, d.opens].join('\t'));
+  return [head.join('\t'), ...lines, '', ['Date','People','Opens'].join('\t'), ...daily].join('\n');
 }
 document.getElementById('btn-usage-refresh')?.addEventListener('click', ()=> renderUsageTab({ reload:true }));
 document.getElementById('usage-search')?.addEventListener('input', ()=> renderUsageTab());
