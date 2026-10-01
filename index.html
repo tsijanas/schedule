@@ -309,6 +309,29 @@
   .level-shortfall-badge{ display:inline-block; font-size:9.5px; font-weight:700; color:var(--brick-text); background:var(--brick-soft); border-radius:6px; padding:1px 6px; margin-bottom:4px; }
   .bar.needs-replace.me{ box-shadow: 0 0 0 2px var(--brick), 0 0 0 4px var(--gold); }
   .your-week-empty{ color:var(--ink-faint); font-size:13px; }
+  /* My schedule, "On the same tasks": the days you're on that task, and who's on it with you */
+  .sched-table thead th.my-day{ background:var(--gold); }
+  .sched-table td.my-day{ background:#FFFBEA; box-shadow: inset 0 3px 0 var(--gold); }
+  .sched-table thead th .my-day-note{ display:block; font-size:10px; font-weight:600; margin-top:2px; }
+  .bar.with-team{ flex-direction:column; align-items:flex-start; gap:0; border-radius:9px; padding:3px 8px; }
+  .bar.with-team .bar-name{ justify-content:flex-start; }
+  .bar .bar-team{ font-size:9.5px; font-weight:500; opacity:0.8; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+  /* My holidays */
+  .my-timeoff-stats{ display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; margin:10px 0 12px; }
+  .my-timeoff-stat{ background:var(--bg); border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+  .my-timeoff-stat b{ display:block; font-family:'Young Serif',serif; font-weight:400; font-size:24px; }
+  .my-timeoff-stat span{ font-size:12px; color:var(--ink-faint); }
+  .my-timeoff-list{ display:flex; flex-direction:column; gap:6px; }
+  .my-timeoff-item{ display:flex; flex-wrap:wrap; gap:4px 12px; align-items:center; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .my-timeoff-item .dot{ width:10px; height:10px; border-radius:50%; background:var(--sage); flex:none; }
+  .my-timeoff-item .dot.sick{ background:var(--brick); }
+  .my-timeoff-item .when{ font-weight:600; min-width:140px; }
+  .my-timeoff-item .len{ margin-left:auto; color:var(--ink-faint); font-size:12px; }
+  .seg-toggle{ display:inline-flex; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--bg); }
+  .seg-toggle button{ border:none; background:transparent; padding:6px 12px; font:600 12.5px Inter,sans-serif; color:var(--ink); cursor:pointer; }
+  .seg-toggle button.on{ background:var(--ink); color:var(--sidebar-ink); }
+  .hol-bar.hol-bar-me-hi{ box-shadow: inset 0 0 0 1.5px var(--ink); }
+  @media (max-width:720px){ .my-timeoff-stats{ grid-template-columns:1fr; } }
   .ywd-chip{ display:block; width:100%; font-size:12px; font-weight:700; padding:6px 12px; border-radius:20px; cursor:pointer; border:none; text-align:left; }
   .ywd-chip:hover{ filter:brightness(0.94); }
   .grid-flash{ animation: gridFlash 1.1s ease; }
@@ -1502,7 +1525,7 @@
     <div class="tab-panel viewer-only" id="tab-myschedule">
       <div class="page-head">
         <h1>My schedule</h1>
-        <p>Who's on what this week — your own rows are highlighted. This view is read-only.</p>
+        <p>Your tasks this week, and who else is on them. This view is read-only.</p>
       </div>
       <div class="card">
         <div class="row">
@@ -1518,6 +1541,8 @@
         <div id="v-your-week-summary" style="overflow-x:auto;"></div>
       </div>
       <div class="card" style="overflow-x:auto;">
+        <h3>On the same tasks</h3>
+        <div class="hint" id="viewer-sched-grid-hint"></div>
         <div id="viewer-sched-grid-wrap"></div>
       </div>
     </div>
@@ -1545,7 +1570,11 @@
     <div class="tab-panel viewer-only" id="tab-myholidays">
       <div class="page-head">
         <h1>My holidays <span class="muted" style="font-weight:400; font-size:14px;" id="v-cal-scope"></span></h1>
-        <p>Everyone's time off, colour-coded. Click an open day to mark yourself off; click your own day again to remove it — you can't edit anyone else's.</p>
+        <p>Click an open day to mark yourself off; click your own day again to remove it. Switch to Everyone to see colleagues' time off too — you can't edit anyone else's.</p>
+      </div>
+      <div class="card" id="v-my-timeoff-card">
+        <h3>Your time off</h3>
+        <div id="v-my-timeoff"></div>
       </div>
       <div class="card">
         <div class="row">
@@ -1553,6 +1582,10 @@
             <button id="v-cal-prev">‹</button>
             <div class="wk-label" id="v-cal-label"></div>
             <button id="v-cal-next">›</button>
+          </div>
+          <div class="seg-toggle" id="v-cal-who" role="group" aria-label="Whose time off to show">
+            <button type="button" data-who="me" class="on">Only me</button>
+            <button type="button" data-who="all">Everyone</button>
           </div>
           <div class="spacer"></div>
           <label class="muted" style="font-size:12.5px;" for="v-hol-reason">Marking new days as</label>
@@ -11268,6 +11301,8 @@ function holidayCalendarHtml(month, memberIds, opts){
     canRemove: ()=>true,     // which bars get an × the viewer can act on
     barClass: ()=>'',
     nameSuffix: ()=>'',      // e.g. " — Team Alpha" on the department-wide sheet
+    label: null,             // (mid, dISO) => text on the bar, instead of the person's name
+    colorFor: null,          // (mid) => {bg, fg}, instead of the person's own colour
   }, opts||{});
   let html = '';
   ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(d=> html+=`<div class="dow">${d}</div>`);
@@ -11296,7 +11331,7 @@ function holidayCalendarHtml(month, memberIds, opts){
         if(!offToday){ if(o.laneGaps) barsHtml += `<div class="hol-bar-gap"></div>`; return; }
         const prevOff = colIdx>0 && (state.holidays[mid]||[]).includes(rowDates[colIdx-1]);
         const nextOff = colIdx<6 && (state.holidays[mid]||[]).includes(rowDates[colIdx+1]);
-        const color = colorForMember(mid);
+        const color = o.colorFor ? o.colorFor(mid) : colorForMember(mid);
         const radiusL = prevOff ? '0' : '7px';
         const radiusR = nextOff ? '0' : '7px';
         const isSick = ((state.holidayReasons[mid]||{})[dISO]) === 'sick';
@@ -11306,7 +11341,7 @@ function holidayCalendarHtml(month, memberIds, opts){
                  border-top-left-radius:${radiusL}; border-bottom-left-radius:${radiusL};
                  border-top-right-radius:${radiusR}; border-bottom-right-radius:${radiusR};"
           title="${escAttr(memberName(mid))}${escAttr(o.nameSuffix(mid))}${isSick?' — out of office':''}${removable?' — click × to remove':''}">
-          <span>${isSick?'<span class="sick-badge">+</span> ':''}${escHtml(memberName(mid))}</span>
+          <span>${isSick?'<span class="sick-badge">+</span> ':''}${escHtml(o.label ? o.label(mid, dISO) : memberName(mid))}</span>
           ${removable?'<span class="hol-bar-x">×</span>':''}
         </div>`;
       });
@@ -12224,8 +12259,8 @@ async function renderNotificationsTab(){
 async function renderViewerScheduleTab(){
   document.getElementById('v-wk-label').textContent = fmtWeek(viewerWeekMonday);
   const sched = await loadWeek(iso(viewerWeekMonday));
-  drawViewerScheduleGrid(sched);
   renderViewerYourWeekSummary(sched);
+  await drawViewerScheduleGrid(sched);
 }
 function renderViewerYourWeekSummary(sched){
   const wrap = document.getElementById('v-your-week-summary');
@@ -12234,79 +12269,88 @@ function renderViewerYourWeekSummary(sched){
   wrap.innerHTML = buildYourWeekTableHtml(sched, viewerWeekMonday, me);
   attachYourWeekClicks(wrap, '#viewer-sched-grid-wrap');
 }
-// For a team with Grand Schedule available, a viewer's own "My schedule" grid only shows:
-// tasks they're actually assigned to this week (their own work), plus tasks explicitly made
-// visible to their level (the same "Also visible to" setting "Who's on" already uses) — the
-// full team picture lives on the separate Grand Schedule tab instead. A team with no Grand
-// Schedule has nowhere else to see the whole picture, so drawViewerScheduleGrid skips this
-// filter entirely for them and shows every task unfiltered.
-function visibleTasksForViewer(tasks, sched, dates, viewerId){
-  const me = state.members.find(m=>m.id===viewerId);
-  const myLevels = (me && me.levels) || [];
-  return tasks.filter(task=>{
-    const assignedThisWeek = dates.some(d=> ((sched[d]||{})[task.id]||[]).includes(viewerId));
-    const visibleByLevel = task.visibleToLevels && task.visibleToLevels.some(l=>myLevels.includes(l));
-    return assignedThisWeek || visibleByLevel;
-  });
-}
-function drawViewerScheduleGrid(sched){
+// "On the same tasks": one row per task the viewer is on this week, showing the colleagues on
+// that same task each day — never the viewer themselves, who already has the card above. In a
+// department with Grand views on, colleagues come from every team in it (the same task name
+// matched across teams, as Grand Schedule does) and each bar says which team; otherwise just
+// the viewer's own team. The whole picture of everyone's week lives on the Grand schedule tab.
+async function drawViewerScheduleGrid(sched){
   const wrap = document.getElementById('viewer-sched-grid-wrap');
+  const hint = document.getElementById('viewer-sched-grid-hint');
   const dates = DAYS.map((d,i)=> iso(addDays(viewerWeekMonday,i)));
-  const scopeIds = state.members.filter(m=>m.teamId===currentTeamId).map(m=>m.id);
-  function runsFor(taskId){
-    const task = state.tasks.find(t=>t.id===taskId);
-    const allowMerge = !!(task && task.sameAllWeek);
-    const runs = [];
-    let i = 0;
-    while(i < DAYS.length){
-      const ids = ((sched[dates[i]]||{})[taskId]) || [];
-      const key = ids.slice().sort().join(',');
-      let j = i;
-      if(key && allowMerge){
-        while(j+1 < DAYS.length){
-          const nextIds = ((sched[dates[j+1]]||{})[taskId]) || [];
-          if(nextIds.slice().sort().join(',') === key) j++; else break;
-        }
-      }
-      runs.push({startIdx:i, endIdx:j, ids, dates:dates.slice(i,j+1)});
-      i = j+1;
-    }
-    return runs;
-  }
-  let html = '<table class="sched-table"><thead><tr><th style="text-align:left;">Task</th>';
-  const viewerBdayPool = state.members.filter(m=>m.teamId===currentTeamId);
-  DAYS.forEach((d,i)=>{
-    const dt = addDays(viewerWeekMonday,i);
-    const bhName = bankHolidayName(iso(dt));
-    const bdayNames = birthdayNamesForDate(iso(dt), viewerBdayPool);
-    html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}${bdayNames.length?`<span class="bday-indicator" title="${escAttr(bdayNames.join(', '))}">🎂 ${escHtml(bdayNames.join(', '))}</span>`:''}</div></th>`;
-  });
-  html += '</tr></thead><tbody>';
-  // A team without Grand Schedule has no separate tab for seeing the whole picture, so this
-  // grid carries both jobs for them — the full team schedule, unfiltered. A team with Grand
-  // Schedule keeps the filtered, own-tasks-only view here, since the full department-wide
-  // picture already lives one tab over.
   const myTeam = state.teams.find(t=>t.id===currentTeamId);
   const myDept = myTeam && myTeam.departmentId ? state.departments.find(d=>d.id===myTeam.departmentId) : null;
   const hasGrand = !!(myDept && myDept.showGrandViews!==false);
-  const visibleTasks = hasGrand
-    ? visibleTasksForViewer(sortedTasksForDisplay(state.tasks), sched, dates, viewerIdentityId)
-    : sortedTasksForDisplay(state.tasks);
-  visibleTasks.forEach(task=>{
-    html += `<tr><td class="taskname" title="${escAttr(task.name)}">${taskNameLabelHtml(task.name, task.url)}</td>`;
-    runsFor(task.id).forEach(run=>{
+  const scopeTeams = hasGrand ? teamsInDepartment(myDept.id) : (myTeam ? [myTeam] : []);
+  if(hint) hint.innerHTML = hasGrand
+    ? `Everyone in <b>${escHtml(myDept.name)}</b> working the same tasks as you this week. Highlighted columns are your days.`
+    : `People in <b>your team${myTeam?` (${escHtml(myTeam.name)})`:''}</b> working the same tasks as you this week. Highlighted columns are your days.`;
+
+  const myTasks = sortedTasksForDisplay(state.tasks).filter(task=>
+    dates.some(d=> ((sched[d]||{})[task.id]||[]).includes(viewerIdentityId)));
+  if(myTasks.length===0){
+    wrap.innerHTML = `<div class="muted" style="padding:6px 2px; font-size:12.5px;">You're not on any tasks this week.</div>`;
+    return;
+  }
+
+  const weekISO = iso(viewerWeekMonday);
+  const scheds = { [currentTeamId]: sched };
+  await Promise.all(scopeTeams.filter(t=>t.id!==currentTeamId).map(async team=>{
+    await ensureTeamDataLoaded([team.id]);
+    scheds[team.id] = await loadWeekForTeam(team.id, weekISO);
+  }));
+  const scopeIds = state.members.filter(m=> scopeTeams.some(t=>t.id===m.teamId)).map(m=>m.id);
+
+  // The days the viewer is on anything, for the column headers.
+  const myDay = dates.map(d=> myTasks.some(task=> ((sched[d]||{})[task.id]||[]).includes(viewerIdentityId)));
+
+  let html = '<table class="sched-table"><thead><tr><th style="text-align:left;">Task</th>';
+  const bdayPool = state.members.filter(m=> scopeIds.includes(m.id) && m.id!==viewerIdentityId);
+  DAYS.forEach((d,i)=>{
+    const dt = addDays(viewerWeekMonday,i);
+    const bhName = bankHolidayName(iso(dt));
+    const bdayNames = birthdayNamesForDate(iso(dt), bdayPool);
+    html += `<th class="${bhName?'bank-hol-col':''} ${myDay[i]?'my-day':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${myDay[i]?'<span class="my-day-note">you\'re on</span>':''}${bhName?'<span class="bank-hol-dot"></span>':''}${bdayNames.length?`<span class="bday-indicator" title="${escAttr(bdayNames.join(', '))}">🎂 ${escHtml(bdayNames.join(', '))}</span>`:''}</div></th>`;
+  });
+  html += '</tr></thead><tbody>';
+
+  myTasks.forEach(myTask=>{
+    const key = (myTask.name||'').trim().toLowerCase();
+    const perTeam = [{ team: myTeam, task: myTask }];
+    if(hasGrand) scopeTeams.forEach(team=>{
+      if(team.id===currentTeamId) return;
+      (state.tasksByTeam[team.id]||[]).forEach(task=>{
+        if((task.name||'').trim().toLowerCase()===key) perTeam.push({ team, task });
+      });
+    });
+    const idsOn = (team, task, d)=> (((scheds[team.id]||{})[d]||{})[task.id]) || [];
+    const dayKey = i=> perTeam.map(({team,task})=> idsOn(team, task, dates[i]).slice().sort().join(',')).join('|');
+    const mergeable = perTeam.every(({task})=>task.sameAllWeek);
+    const runs = [];
+    for(let i=0; i<dates.length; ){
+      let j = i;
+      if(mergeable) while(j+1<dates.length && dayKey(j+1)===dayKey(i)) j++;
+      runs.push({ startIdx:i, endIdx:j });
+      i = j+1;
+    }
+    html += `<tr><td class="taskname" title="${escAttr(myTask.name)}">${taskNameLabelHtml(myTask.name, myTask.url)}</td>`;
+    runs.forEach(run=>{
       const span = run.endIdx - run.startIdx + 1;
       const spanned = span > 1;
-      html += `<td ${spanned?`colspan="${span}"`:''} class="${spanned?'spanned-cell':''}"><div class="chipwrap">`;
-      run.ids.forEach(mid=>{
-        const pColor = barColorFor(mid, currentTeamId);
-        const overlay = pColor.fg==='#EDFFE9' ? 'rgba(255,255,255,0.18)' : 'rgba(0,70,84,0.12)';
-        const isMe = mid === viewerIdentityId;
-        html += `<div class="bar-item"><div class="bar ${isMe?'me':''}" style="background:${pColor.bg}; color:${pColor.fg};">
-          <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
-        </div></div>`;
+      const d0 = dates[run.startIdx];
+      const iAmOn = idsOn(myTeam, myTask, d0).includes(viewerIdentityId);
+      let bars = '';
+      perTeam.forEach(({team, task})=>{
+        idsOn(team, task, d0).forEach(mid=>{
+          if(mid===viewerIdentityId) return;
+          const pColor = barColorFor(mid, team.id);
+          const teamLabel = hasGrand ? (team.id===currentTeamId ? 'your team' : team.name) : '';
+          bars += `<div class="bar-item"><div class="bar ${teamLabel?'with-team':''}" style="background:${pColor.bg}; color:${pColor.fg};" title="${escAttr(memberName(mid))}${hasGrand?` — ${escAttr(team.name)}`:''}">
+            <span class="bar-name"><span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span></span>${teamLabel?`<span class="bar-team">${escHtml(teamLabel)}</span>`:''}
+          </div></div>`;
+        });
       });
-      html += `</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
+      html += `<td ${spanned?`colspan="${span}"`:''} class="${spanned?'spanned-cell':''} ${iAmOn?'my-day':''}" data-date="${d0}" data-task="${myTask.id}"><div class="chipwrap">${bars}</div>${spanned?`<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`:''}</td>`;
     });
     html += '</tr>';
   });
@@ -12435,22 +12479,93 @@ function viewerHolidayScope(){
     label: grandOn ? `Everyone in ${dept.name}` : `Your team${myTeam?` — ${myTeam.name}`:''}`,
   };
 }
+// The calendar opens on the viewer's own time off; Everyone shows the scope above.
+let viewerCalWho = 'me';
+document.querySelectorAll('#v-cal-who button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    viewerCalWho = btn.dataset.who;
+    document.querySelectorAll('#v-cal-who button').forEach(b=> b.classList.toggle('on', b===btn));
+    drawViewerCalendar();
+  });
+});
 function renderViewerHolidaysTab(){
   drawViewerCalendar();
+}
+// Consecutive days off, with a weekend in between still counting as one stretch.
+function holidayRunsFor(mid){
+  const dates = (state.holidays[mid]||[]).slice().sort();
+  const reasons = state.holidayReasons[mid]||{};
+  const runs = [];
+  dates.forEach(dISO=>{
+    const reason = reasons[dISO]==='sick' ? 'sick' : 'holiday';
+    const last = runs[runs.length-1];
+    if(last && last.reason===reason){
+      let gapOk = true;
+      for(let d = addDays(new Date(last.end+'T00:00:00'),1); iso(d) < dISO; d = addDays(d,1)){
+        if(d.getDay()!==0 && d.getDay()!==6){ gapOk = false; break; }
+      }
+      if(gapOk){ last.end = dISO; last.dates.push(dISO); return; }
+    }
+    runs.push({ start:dISO, end:dISO, reason, dates:[dISO] });
+  });
+  return runs;
+}
+function isWorkingDay(dISO){
+  const d = new Date(dISO+'T00:00:00');
+  return d.getDay()!==0 && d.getDay()!==6 && !bankHolidayName(dISO);
+}
+function renderViewerTimeOffSummary(){
+  const wrap = document.getElementById('v-my-timeoff');
+  if(!wrap) return;
+  if(!viewerIdentityId){ wrap.innerHTML = ''; return; }
+  const today = iso(new Date());
+  const year = today.slice(0,4);
+  const mine = (state.holidays[viewerIdentityId]||[]).filter(d=> d.slice(0,4)===year && isWorkingDay(d));
+  const reasons = state.holidayReasons[viewerIdentityId]||{};
+  const isSick = d=> reasons[d]==='sick';
+  const taken = mine.filter(d=> d<today && !isSick(d)).length;
+  const booked = mine.filter(d=> d>=today && !isSick(d)).length;
+  const ooo = mine.filter(d=> isSick(d)).length;
+  const fmt = dISO=> new Date(dISO+'T00:00:00').toLocaleDateString('en-US',{month:'short', day:'numeric'});
+  const upcoming = holidayRunsFor(viewerIdentityId).filter(r=> r.end>=today).slice(0,6);
+  const listHtml = upcoming.length ? upcoming.map(r=>{
+    const workDays = r.dates.filter(isWorkingDay).length;
+    const daysAway = Math.round((new Date(r.start+'T00:00:00') - new Date(today+'T00:00:00'))/86400000);
+    const when = daysAway<=0 ? 'now' : daysAway===1 ? 'tomorrow' : daysAway<14 ? `in ${daysAway} days` : `in ${Math.round(daysAway/7)} weeks`;
+    return `<div class="my-timeoff-item"><span class="dot ${r.reason==='sick'?'sick':''}"></span>
+      <span class="when">${r.start===r.end ? fmt(r.start) : `${fmt(r.start)} – ${fmt(r.end)}`}</span>
+      <span>${r.reason==='sick'?'Out of office':'Holiday'}</span>
+      <span class="len">${workDays} working day${workDays===1?'':'s'} · ${when}</span></div>`;
+  }).join('') : `<div class="muted" style="font-size:12.5px;">Nothing booked yet. Click a day in the calendar below to add some.</div>`;
+  wrap.innerHTML = `
+    <div class="my-timeoff-stats">
+      <div class="my-timeoff-stat"><b>${taken}</b><span>holiday days taken in ${year}</span></div>
+      <div class="my-timeoff-stat"><b>${booked}</b><span>holiday days still booked this year</span></div>
+      <div class="my-timeoff-stat"><b>${ooo}</b><span>out-of-office days in ${year}</span></div>
+    </div>
+    <div class="my-timeoff-list">${listHtml}</div>`;
 }
 function drawViewerCalendar(){
   document.getElementById('v-cal-label').textContent = viewerCalMonth.toLocaleDateString('en-US',{month:'long', year:'numeric'});
   const grid = document.getElementById('v-cal-grid');
+  renderViewerTimeOffSummary();
   const scope = viewerHolidayScope();
+  const onlyMe = viewerCalWho === 'me';
   const scopeLabel = document.getElementById('v-cal-scope');
-  if(scopeLabel) scopeLabel.textContent = scope.label;
-  grid.innerHTML = holidayCalendarHtml(viewerCalMonth, scope.ids, {
+  if(scopeLabel) scopeLabel.textContent = onlyMe ? 'Only you' : scope.label;
+  const ids = onlyMe ? (viewerIdentityId ? [viewerIdentityId] : []) : scope.ids;
+  const MY_COLOR = { bg:'var(--gold)', fg:'var(--ink)' };
+  grid.innerHTML = holidayCalendarHtml(viewerCalMonth, ids, {
     selected: null,
     laneGaps: false,
     bankHolidays: false,
     canRemove: mid=> mid===viewerIdentityId,
-    barClass: mid=> mid===viewerIdentityId ? 'hol-bar-mine' : 'hol-bar-locked',
+    barClass: mid=> mid===viewerIdentityId ? 'hol-bar-mine hol-bar-me-hi' : 'hol-bar-locked',
     nameSuffix: mid=>{ const tn = scope.grandOn ? teamNameForMember(mid) : ''; return tn ? ` — ${tn}` : ''; },
+    // Your own days are always yellow, so they stand out among everyone else's.
+    colorFor: mid=> mid===viewerIdentityId ? MY_COLOR : colorForMember(mid),
+    label: (mid, dISO)=> mid!==viewerIdentityId ? memberName(mid)
+      : onlyMe ? (((state.holidayReasons[mid]||{})[dISO])==='sick' ? 'Out of office' : 'Holiday') : 'You',
   });
 
   grid.querySelectorAll('.hol-bar-mine').forEach(bar=>{
@@ -12502,6 +12617,9 @@ document.getElementById('v-cal-next').addEventListener('click', ()=>{ viewerCalM
 
 // ---------- init ----------
 window.__rotaRestart = async function(){
+  // Firebase itself didn't load: boot() has already put up "Couldn't connect" (with Reload and
+  // Preview), and there is nothing to read from. Leave that message where it is.
+  if(!window.storage || !window.rotaDb) return;
   const loaded = await loadState();
   if(loaded === false) return; // the load failed and said so; don't start on half a state
   if(loaded === 'denied'){ startAccessCheck({ stateMissing:true }); return; }
