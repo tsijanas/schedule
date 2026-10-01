@@ -1,4 +1,4 @@
-build: 2026-10-01b
+build: 2026-10-01c
 includes:
   - app icon + manifest actually shipped in the image
   - cache headers (deploys visible without a hard refresh) and the security headers restored
@@ -9,3 +9,4 @@ includes:
   - answers on port 80 as well as 3000; IPv6 added at startup when the pod has it
   - a failed load of teams, people or holidays stops with a message instead of saving defaults over them
   - Data -> Automatic backup: Admins set where the nightly backup is emailed (needs the rules publish)
+  - someone not yet approved goes on to the access check instead of stopping at "Couldn't load"

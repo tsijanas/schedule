@@ -2622,6 +2622,12 @@ function teamsNeededForViewer(m){
 // look like a brand-new install, and a brand-new install writes the default "Main Team" over
 // the team list. Every team and its schedules then vanished for everyone, not just for the
 // person whose load failed. On a failed read, stop and say so; never write.
+//
+// One failure is expected rather than a fault: data loads before the access check, so someone
+// signed in but not yet approved — a new hire whose invite hasn't been claimed yet — is refused
+// with permission-denied. That person goes on to the access check without any state (which
+// claims the invite or shows the waiting screen), and the page reloads once they're in.
+function isDeniedRead(e){ return !!(e && e.code === 'permission-denied'); }
 function showLoadFailure(what, e){
   console.error('Could not load '+what, e);
   const cover = document.getElementById('boot-cover');
@@ -2645,7 +2651,7 @@ async function loadState(){
   // from before teams existed, so we create one default team and fold any old data into it.
   let teams = null;
   try{ const t = await window.storage.get('teams', true); teams = t ? JSON.parse(t.value) : null; }
-  catch(e){ showLoadFailure('the team list', e); return false; }
+  catch(e){ if(isDeniedRead(e)) return 'denied'; showLoadFailure('the team list', e); return false; }
   const firstRun = !teams || teams.length===0;
   state.teams = firstRun ? JSON.parse(JSON.stringify(DEFAULT_TEAMS)) : teams;
   currentTeamId = state.teams[0].id;
@@ -2669,7 +2675,7 @@ async function loadState(){
       state.members = arr;
       loadedMembersFromCollection = true;
     }
-  }catch(e){ showLoadFailure('people', e); return false; }
+  }catch(e){ if(isDeniedRead(e)) return 'denied'; showLoadFailure('people', e); return false; }
   if(!loadedMembersFromCollection){
     // Nothing in the new collection yet — fall back to the legacy single-blob roster (or
     // defaults on a brand-new install) so nothing is lost; it gets fanned out into individual
@@ -2776,7 +2782,7 @@ async function loadState(){
       });
       loadedHolidaysFromCollection = true;
     }
-  }catch(e){ showLoadFailure('holidays', e); return false; }
+  }catch(e){ if(isDeniedRead(e)) return 'denied'; showLoadFailure('holidays', e); return false; }
   if(!loadedHolidaysFromCollection){
     const [holidaysRes, holidayReasonsRes] = await Promise.all([
       window.storage.get('holidays', true).catch(()=>null),
@@ -11957,7 +11963,8 @@ function revealApp(){
 }
 
 let bindIdentityInFlight = null;
-function startAccessCheck(){
+function startAccessCheck(opts){
+  const stateMissing = !!(opts && opts.stateMissing);
   if(!window.rotaAuth){
     // Firebase failed to load entirely — boot() already replaced #boot-cover with a real
     // "couldn't connect" message and a reload button. Nothing to do here but not crash.
@@ -11967,6 +11974,22 @@ function startAccessCheck(){
     if(info.status === 'not_invited' || info.status === 'error'){
       openPendingModal(info);
       revealApp(); // safe now — the pending modal (opaque + blurred) is what's actually shown
+      return;
+    }
+    if(stateMissing){
+      // Approved now (typically: the access check just claimed their invite), but the data was
+      // refused before that happened. Reload once to load it properly. If it's refused again
+      // for someone the app counts as approved, the rules disagree with the app — say so
+      // instead of reloading forever.
+      let tries = 99;
+      try{ tries = Number(sessionStorage.getItem('rotaDeniedReload')) || 0; }catch(e){}
+      if(tries < 1){
+        try{ sessionStorage.setItem('rotaDeniedReload', String(tries+1)); }catch(e){}
+        window.location.reload();
+        return;
+      }
+      try{ sessionStorage.removeItem('rotaDeniedReload'); }catch(e){}
+      showLoadFailure('the team list', { code: 'permission-denied — you are approved, but the database refused the read. An Admin should check that the published Firestore rules match the app.' });
       return;
     }
     closePendingModal();
@@ -12479,7 +12502,10 @@ document.getElementById('v-cal-next').addEventListener('click', ()=>{ viewerCalM
 
 // ---------- init ----------
 window.__rotaRestart = async function(){
-  if(await loadState() === false) return; // the load failed and said so; don't start on half a state
+  const loaded = await loadState();
+  if(loaded === false) return; // the load failed and said so; don't start on half a state
+  if(loaded === 'denied'){ startAccessCheck({ stateMissing:true }); return; }
+  try{ sessionStorage.removeItem('rotaDeniedReload'); }catch(e){}
   startAccessCheck();
 };
 (async function init(){
