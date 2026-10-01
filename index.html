@@ -2612,11 +2612,35 @@ function teamsNeededForViewer(m){
   if(myTeam && myTeam.departmentId) return state.teams.filter(t=>t.departmentId===myTeam.departmentId).map(t=>t.id);
   return [m.teamId];
 }
+// A read that FAILED is not the same as a read that found nothing. Treating them alike made
+// any failed load of the team list — offline, a blocked connection, quota, a rules problem —
+// look like a brand-new install, and a brand-new install writes the default "Main Team" over
+// the team list. Every team and its schedules then vanished for everyone, not just for the
+// person whose load failed. On a failed read, stop and say so; never write.
+function showLoadFailure(what, e){
+  console.error('Could not load '+what, e);
+  const cover = document.getElementById('boot-cover');
+  if(!cover) return;
+  const reason = String((e && (e.code || e.message)) || e || 'unknown error');
+  cover.style.display = 'flex';
+  cover.innerHTML = `<div style="max-width:360px; text-align:center; color:var(--sidebar-ink); font-family:'Inter',sans-serif; padding:20px;">
+    <div style="font-weight:600; margin-bottom:6px; font-size:15px;">Couldn't load the schedule data</div>
+    <div style="font-size:13px; opacity:0.85; line-height:1.5;">The app is running but couldn't read its data, so it has stopped rather than show — or save — an empty schedule. Nothing has been changed. Try again in a minute.</div>
+    <div class="mono" style="font-size:11px; opacity:0.7; margin-top:8px; word-break:break-word;"></div>
+    <div style="display:flex; gap:8px; justify-content:center; margin-top:14px;">
+      <button id="load-retry" style="padding:8px 16px; border-radius:8px; border:none; background:var(--sidebar-ink); color:var(--sidebar); font-weight:600; cursor:pointer;">Reload</button>
+    </div>
+  </div>`;
+  cover.querySelector('.mono').textContent = 'Loading '+what+' failed: '+reason;
+  const btn = document.getElementById('load-retry');
+  if(btn) btn.addEventListener('click', ()=> window.location.reload());
+}
 async function loadState(){
   // Teams first — if there are none yet, this is either a brand-new install or an upgrade
   // from before teams existed, so we create one default team and fold any old data into it.
   let teams = null;
-  try{ const t = await window.storage.get('teams', true); teams = t ? JSON.parse(t.value) : null; }catch(e){}
+  try{ const t = await window.storage.get('teams', true); teams = t ? JSON.parse(t.value) : null; }
+  catch(e){ showLoadFailure('the team list', e); return false; }
   const firstRun = !teams || teams.length===0;
   state.teams = firstRun ? JSON.parse(JSON.stringify(DEFAULT_TEAMS)) : teams;
   currentTeamId = state.teams[0].id;
@@ -2640,7 +2664,7 @@ async function loadState(){
       state.members = arr;
       loadedMembersFromCollection = true;
     }
-  }catch(e){ console.error('Could not load app_members collection', e); }
+  }catch(e){ showLoadFailure('people', e); return false; }
   if(!loadedMembersFromCollection){
     // Nothing in the new collection yet — fall back to the legacy single-blob roster (or
     // defaults on a brand-new install) so nothing is lost; it gets fanned out into individual
@@ -2747,7 +2771,7 @@ async function loadState(){
       });
       loadedHolidaysFromCollection = true;
     }
-  }catch(e){ console.error('Could not load app_holidays collection', e); }
+  }catch(e){ showLoadFailure('holidays', e); return false; }
   if(!loadedHolidaysFromCollection){
     const [holidaysRes, holidayReasonsRes] = await Promise.all([
       window.storage.get('holidays', true).catch(()=>null),
@@ -12406,7 +12430,7 @@ document.getElementById('v-cal-next').addEventListener('click', ()=>{ viewerCalM
 
 // ---------- init ----------
 window.__rotaRestart = async function(){
-  await loadState();
+  if(await loadState() === false) return; // the load failed and said so; don't start on half a state
   startAccessCheck();
 };
 (async function init(){
