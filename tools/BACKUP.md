@@ -1,8 +1,13 @@
 # Nightly backup to Google Drive
 
 `backup-to-drive.gs` copies the whole Firestore database into a JSON file in a Google Drive
-folder every night, and emails a link (or a FAILED notice). It only reads; it never changes
+folder every night, and emails it (or a FAILED notice). It only reads; it never changes
 the database. Backups older than 60 days are deleted.
+
+**Where it goes** is set in the app: **Data → Automatic backup** (Admins only). Those addresses
+get the nightly email with the file attached, and the Drive folder is shared with them. With
+nothing set, it goes to the account that runs the script. That setting needs the rules in
+`firestore.rules` published (Firebase console → Firestore Database → Rules → paste → Publish).
 
 Do this once, signed in to the Google account that owns the Firebase project:
 

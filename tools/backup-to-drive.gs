@@ -7,19 +7,25 @@
  *
  * Each run saves one JSON file, schedule-backup-YYYY-MM-DD.json, into the Drive folder named
  * below, and deletes backups older than KEEP_DAYS. Setup steps are in tools/BACKUP.md.
+ *
+ * Who receives it is set in the app (Data -> Automatic backup, Admins only), stored in
+ * settings/backup. Those addresses get the email with the file attached, and the Drive folder
+ * is shared with them. With nothing set, it goes to the account running this script.
  */
 
 const PROJECT_ID = 'schedule-75592';
 const FOLDER_NAME = 'Schedule backups';
 const KEEP_DAYS = 60;
-// Who gets the "backup done" / "backup FAILED" email. Empty means the account running the script.
-const NOTIFY_EMAIL = '';
+// Gmail caps attachments at 25MB; above this the email carries the Drive link only.
+const MAX_ATTACH_BYTES = 20 * 1024 * 1024;
 
 const BASE = 'https://firestore.googleapis.com/v1/projects/' + PROJECT_ID + '/databases/(default)/documents';
 
 function backupNow() {
-  const to = NOTIFY_EMAIL || Session.getEffectiveUser().getEmail();
+  const me = Session.getEffectiveUser().getEmail();
+  let recipients = [me];
   try {
+    recipients = backupRecipients_() || [me];
     const data = { exportedAt: new Date().toISOString(), projectId: PROJECT_ID, collections: {} };
     let total = 0;
 
@@ -36,20 +42,29 @@ function backupNow() {
 
     const folder = getFolder_();
     const name = 'schedule-backup-' + Utilities.formatDate(new Date(), 'Etc/UTC', 'yyyy-MM-dd') + '.json';
-    const file = folder.createFile(name, JSON.stringify(data), 'application/json');
+    const json = JSON.stringify(data);
+    const file = folder.createFile(name, json, 'application/json');
     removeOldBackups_(folder);
+    shareFolder_(folder, recipients.filter(r => r !== me));
 
     const teams = data.collections['rota_kv'].find(d => d.id === 'teams');
     let teamCount = '?';
     try { teamCount = JSON.parse(teams.fields.value).length; } catch (e) {}
 
-    MailApp.sendEmail(to, 'Schedule backup done (' + teamCount + ' teams, ' + total + ' records)',
-      'Tonight\'s backup is saved in Google Drive:\n' + file.getUrl() +
-      '\n\nTeams in the team list: ' + teamCount +
-      '\nRecords saved: ' + total +
-      '\n\nIf the number of teams looks wrong, the backup from an earlier night is in the same folder.');
+    const attach = json.length <= MAX_ATTACH_BYTES;
+    MailApp.sendEmail({
+      to: recipients.join(','),
+      subject: 'Schedule backup done (' + teamCount + ' teams, ' + total + ' records)',
+      body: 'Tonight\'s backup is ' + (attach ? 'attached, and also ' : '') + 'saved in Google Drive:\n' + file.getUrl() +
+        '\nAll backups (last ' + KEEP_DAYS + ' days): ' + folder.getUrl() +
+        '\n\nTeams in the team list: ' + teamCount +
+        '\nRecords saved: ' + total +
+        '\n\nIf the number of teams looks wrong, the backup from an earlier night is in the same folder.' +
+        '\nThis contains personal data (names, emails, birthdays) - do not forward it.',
+      attachments: attach ? [Utilities.newBlob(json, 'application/json', name)] : [],
+    });
   } catch (e) {
-    MailApp.sendEmail(to, 'Schedule backup FAILED', 'The nightly backup did not complete:\n\n' + (e && e.stack || e));
+    MailApp.sendEmail(recipients.join(','), 'Schedule backup FAILED', 'The nightly backup did not complete:\n\n' + (e && e.stack || e));
     throw e;
   }
 }
@@ -131,6 +146,27 @@ function unwrap_(v) {
   if ('arrayValue' in v) return (v.arrayValue.values || []).map(unwrap_);
   if ('mapValue' in v) return unwrapFields_(v.mapValue.fields || {});
   return v;
+}
+
+/** Addresses set in the app under Data -> Automatic backup, or null when none are set. */
+function backupRecipients_() {
+  const res = UrlFetchApp.fetch(BASE + '/settings/backup', {
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() === 404) return null;
+  if (res.getResponseCode() !== 200) throw new Error('Could not read backup settings: ' + res.getContentText().slice(0, 300));
+  const emails = (simplify_(JSON.parse(res.getContentText())).fields.emails || [])
+    .filter(e => typeof e === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  return emails.length ? emails : null;
+}
+
+/** Give each recipient view access to the backups folder (only once; Drive ignores repeats). */
+function shareFolder_(folder, emails) {
+  const already = folder.getViewers().concat(folder.getEditors()).map(u => u.getEmail().toLowerCase());
+  emails.filter(e => already.indexOf(e.toLowerCase()) === -1).forEach(e => {
+    try { folder.addViewer(e); } catch (err) { console.warn('Could not share the folder with ' + e + ': ' + err); }
+  });
 }
 
 function getFolder_() {

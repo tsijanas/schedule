@@ -245,6 +245,16 @@ service cloud.firestore {
     // both a brand-new install and the one-time migration of whoever already held the Manager
     // tag in app_members before this rule existed). After that, only an existing manager or
     // the owner may change it. ----
+    // ---- Where the nightly backup is emailed. Admins only, for reading too: whoever sets this
+    // receives the entire database every night. The backup script itself reads it with the
+    // project owner's Google access, which doesn't go through these rules.
+    match /settings/backup {
+      allow read: if isOwner() || isAdminUid();
+      allow write: if (isOwner() || isAdminUid())
+        && request.resource.data.emails is list
+        && request.resource.data.emails.size() <= 5;
+    }
+
     match /access_control/managers {
       allow read: if isApproved();
       allow create: if isApproved() && !exists(/databases/$(database)/documents/access_control/managers);

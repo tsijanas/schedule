@@ -1705,6 +1705,11 @@
         <textarea id="export-output" rows="7" style="margin-top:12px; display:none; font-family:'IBM Plex Mono',monospace; font-size:11px;" readonly></textarea>
       </div>
       <div class="card">
+        <h3>Automatic backup</h3>
+        <div class="hint">Every night a full copy of the data is saved to Google Drive and emailed to the addresses below, and the Drive folder is shared with them. Admins only — the backup holds everyone's names, emails and birthdays.</div>
+        <div id="backup-settings-wrap" style="margin-top:10px;"><div class="muted" style="font-size:12.5px;">Loading…</div></div>
+      </div>
+      <div class="card">
         <h3>Import</h3>
         <div class="hint">Choose a previously exported file, or paste its contents below, then load it. This replaces everything currently shown in the app on this screen.</div>
         <div class="row">
@@ -4311,7 +4316,7 @@ document.querySelectorAll('.nav-item').forEach(btn=>{
     if(btn.dataset.tab==='grand-registry') renderGrandRegistryTab();
     if(btn.dataset.tab==='holidays') renderHolidaysTab();
     if(btn.dataset.tab==='grand-holidays') renderGrandHolidaysTab();
-    if(btn.dataset.tab==='data'){ renderAuditLog(); }
+    if(btn.dataset.tab==='data'){ renderAuditLog(); renderBackupSettings(); }
     if(btn.dataset.tab==='departments'){ renderDeptSetupCard(); }
     if(btn.dataset.tab==='dept-teams'){ renderDeptTeamsCard(); }
     if(btn.dataset.tab==='ideas') renderIdeasTab();
@@ -11511,6 +11516,50 @@ document.getElementById('cal-prev').addEventListener('click', ()=>{ currentCalMo
 document.getElementById('cal-next').addEventListener('click', ()=>{ currentCalMonth.setMonth(currentCalMonth.getMonth()+1); selectedHolidayDates.clear(); drawCalendar(); });
 
 // ================= DATA TAB (backup / restore) =================
+// Where the nightly backup (tools/backup-to-drive.gs) sends its copy. Kept in settings/backup,
+// which the rules let only Admins read or write: whoever sets this address receives the whole
+// database every night, so it can't sit in rota_kv, which every approved user can write.
+async function renderBackupSettings(){
+  const wrap = document.getElementById('backup-settings-wrap');
+  if(!wrap) return;
+  if(!isOrgAdminViewer()){
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Only Admins can see or change where backups go.</div>`;
+    return;
+  }
+  const { db, doc, getDoc, setDoc } = window.rotaDb;
+  let emails = [];
+  try{
+    const snap = await getDoc(doc(db, 'settings', 'backup'));
+    if(snap.exists() && Array.isArray(snap.data().emails)) emails = snap.data().emails;
+  }catch(e){
+    console.error('Could not load backup settings', e);
+    wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Couldn't load the backup settings (${escHtml(e.code||e.message||e)}).</div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <label style="font-size:12.5px; font-weight:600; display:block; margin-bottom:4px;">Send backups to</label>
+    <div class="row">
+      <input type="text" id="backup-emails" style="flex:1; min-width:220px;" placeholder="backups@example.com, someone@example.com">
+      <button class="btn small" id="btn-save-backup-emails">Save</button>
+    </div>
+    <div class="muted" style="font-size:11.5px; margin-top:6px;">Separate several addresses with commas (up to 5). Leave empty to send only to the account that runs the backup.</div>`;
+  const input = document.getElementById('backup-emails');
+  input.value = emails.join(', ');
+  document.getElementById('btn-save-backup-emails').addEventListener('click', async ()=>{
+    const list = input.value.split(/[,;\s]+/).map(x=>x.trim().toLowerCase()).filter(Boolean);
+    const bad = list.filter(x=> !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+    if(bad.length){ showToast(`Not an email address: ${bad[0]}`); return; }
+    if(list.length > 5){ showToast('Up to 5 addresses'); return; }
+    try{
+      await setDoc(doc(db, 'settings', 'backup'), { emails: list, updatedAt: Date.now(), updatedBy: (viewerIdentityId && memberName(viewerIdentityId)) || '' });
+      showToast(list.length ? 'Backups will go to '+list.join(', ') : 'Backups go to the backup account only');
+      logAudit('backup.recipients', { emails: list });
+    }catch(e){
+      console.error('Could not save backup settings', e);
+      showToast(e && e.code==='permission-denied' ? 'Only Admins can change this' : 'Could not save — try again');
+    }
+  });
+}
 function buildExportPayload(){
   return {
     exportedAt: new Date().toISOString(),
