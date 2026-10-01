@@ -390,7 +390,8 @@
   th.bank-hol-col{ background:var(--gold-soft) !important; }
   .cell-bank-hol-note{ font-size:10px; color:var(--ink-faint); line-height:1.3; }
   .bank-hol-dot{ width:6px; height:6px; border-radius:50%; background:var(--brick); display:inline-block; margin-top:2px; }
-  .bday-indicator{ font-size:9.5px; font-weight:600; color:var(--ink-soft); white-space:nowrap; margin-top:1px; max-width:70px; overflow:hidden; text-overflow:ellipsis; }
+  /* Wraps onto more lines rather than cutting the name off — a birthday is only worth showing if you can read whose it is. */
+  .bday-indicator{ font-size:9.5px; font-weight:600; color:var(--ink-soft); white-space:normal; overflow-wrap:anywhere; margin-top:1px; max-width:100%; line-height:1.25; text-align:center; }
   .day.bank-holiday{ box-shadow:inset 0 0 0 2px var(--gold); }
   .task-lvl-tag{ font-size:9.5px; font-weight:700; color:var(--ink-soft); background:var(--sage-soft); border-radius:6px; padding:1px 6px; letter-spacing:0.02em; width:fit-content; }
   .audit-log-list{ display:flex; flex-direction:column; gap:2px; max-height:420px; overflow-y:auto; }
