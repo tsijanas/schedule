@@ -668,6 +668,7 @@
   .tasks-table .gt-name .task-name:hover, .tasks-table .gt-name .task-name:focus{ border-color:var(--line); background:#fff; }
   .tasks-table .gt-levels{ min-width:130px; }
   .tasks-table .gt-ms{ min-width:150px; }
+  .unit-pin{ font-size:9.5px; margin-left:2px; }
   .tasks-table .gt-flag{ width:74px; text-align:center; }
   .tasks-table .gt-flag-label{ display:inline-flex; align-items:center; gap:4px; font-size:11px; white-space:nowrap; }
   .tasks-table .gt-link{ min-width:170px; }
@@ -6055,7 +6056,7 @@ function multiSelectDropdownHtml(fieldClass, options, selectedIds){
     : selectedNames.length===1 ? selectedNames[0]
     : `${selectedNames.length} selected`;
   const optionsHtml = options.length===0
-    ? `<div class="ms-empty">No other tasks yet.</div>`
+    ? `<div class="ms-empty">${fieldClass.includes('dedicated') ? 'No one is ticked for this task yet.' : 'No other tasks yet.'}</div>`
     : options.map(o=>`<label><input type="checkbox" value="${escAttr(o.id)}" ${selected.has(o.id)?'checked':''}> ${escHtml(o.name)}</label>`).join('');
   return `<div class="ms-dropdown ${fieldClass}">
     <div class="ms-dropdown-trigger"><span class="ms-summary">${escHtml(summary)}</span><span class="ms-arrow">▾</span></div>
@@ -6118,6 +6119,7 @@ function renderTasksTab(){
     <th class="gt-ms" title="Never assigned to the same person on the same day as these">Cannot combine with</th>
     <th class="gt-ms" title="Assigns 1 additional task from these">Combine with</th>
     <th class="gt-flag" title="The scheduler picks one person to cover every day this task is needed that week">Same all week</th>
+    <th class="gt-ms" title="A fixed unit: these people work this task every day it's needed, whatever the number. Anything above them is covered by normal rotation. Other tasks use them only when nobody else can.">Dedicated</th>
     <th class="gt-flag">Grand</th>
     <th class="gt-link" title="Where this task is actually worked — a queue, dashboard or runbook. The task name becomes a link to it on every schedule.">Link</th>
     <th class="gt-notes">Notes / conditions</th>
@@ -6145,6 +6147,13 @@ function renderTasksTab(){
       : t.combineWith==='__rotational__' ? otherTasks.map(o=>o.id)
       : t.combineWith ? [t.combineWith] : [];
     const lockedAttr = locked ? 'disabled' : '';
+    // Who can be in the unit: this team's people ticked for the task, plus anyone already on
+    // it from another team (set department-wide in Grand Tasks), so saving here keeps them.
+    const dedicatedNow = dedicatedIdsOf(t);
+    const dedicatedOptions = state.members
+      .filter(m=> (m.teamId===currentTeamId && m.eligibility && m.eligibility[t.id]) || dedicatedNow.includes(m.id))
+      .map(m=>({ id:m.id, name: m.teamId===currentTeamId ? memberName(m.id) : `${memberName(m.id)} — ${state.teams.find(x=>x.id===m.teamId)?.name||'other team'}` }))
+      .sort((a,b)=> a.name.localeCompare(b.name));
     html += `<tr class="task-card ${locked?'grid-row-locked':''}" data-ti="${ti}">
       <td class="gt-sel"><input type="checkbox" class="card-select-check" data-ti="${ti}"></td>
       <td class="gt-name">
@@ -6162,6 +6171,8 @@ function renderTasksTab(){
       <td class="gt-ms">${multiSelectDropdownHtml('exclude-select', otherTasks, excludesArr)}</td>
       <td class="gt-ms">${multiSelectDropdownHtml('combine-select', otherTasks, combineArr)}</td>
       <td class="gt-flag"><input type="checkbox" class="same-week-check" ${t.sameAllWeek?'checked':''} ${lockedAttr}></td>
+      <td class="gt-ms">${multiSelectDropdownHtml('dedicated-select', dedicatedOptions, dedicatedNow)}
+        <div class="muted gt-hint">${dedicatedNow.length?'':'Rotation'}</div></td>
       <td class="gt-flag">${isGrandShared
         ? `<label class="gt-flag-label"><input type="checkbox" class="grand-override-check" data-ti="${ti}" ${isOverridden?'checked':''}> Override</label>`
         : `<label class="gt-flag-label"><input type="checkbox" class="show-in-grand-check" data-ti="${ti}" ${t.showInGrand!==false?'checked':''}> Show</label>`}</td>
@@ -6179,7 +6190,7 @@ function renderTasksTab(){
   // Locked rows follow Grand Tasks, so their multi-selects are read-only too — the checkbox
   // inputs live inside the dropdown menus, which have no disabled state of their own.
   wrap.querySelectorAll('tr.grid-row-locked').forEach(row=>{
-    row.querySelectorAll('.lvl-select, .visible-lvl-select').forEach(dd=> dd.classList.add('ms-locked'));
+    row.querySelectorAll('.lvl-select, .visible-lvl-select, .dedicated-select').forEach(dd=> dd.classList.add('ms-locked'));
   });
   wrap.querySelectorAll('.grand-override-check').forEach(cb=>{
     cb.addEventListener('change', ()=>{
@@ -6195,6 +6206,7 @@ function renderTasksTab(){
     const visibleToLevels = Array.from(card.querySelectorAll('.visible-lvl-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const excludes = Array.from(card.querySelectorAll('.exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const combineWith = Array.from(card.querySelectorAll('.combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+    const dedicated = Array.from(card.querySelectorAll('.dedicated-select .ms-dropdown-menu input:checked')).map(c=>c.value);
     const sameAllWeek = card.querySelector('.same-week-check').checked;
     const notes = card.querySelector('.task-notes').value;
     const url = card.querySelector('.task-link').value.trim();
@@ -6203,7 +6215,7 @@ function renderTasksTab(){
     const extra = {};
     if(overrideCb) extra.grandOverride = overrideCb.checked;
     if(showInGrandCb) extra.showInGrand = showInGrandCb.checked;
-    return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, sameAllWeek, notes, url, ...extra } };
+    return { ti, task: { ...state.tasks[ti], name, levels, visibleToLevels, excludes, combineWith, dedicated, sameAllWeek, notes, url, ...extra } };
   }
   function updateDeleteSelectedTasksState(){
     const checked = wrap.querySelectorAll('.card-select-check:checked').length;
@@ -7027,6 +7039,12 @@ function splitProportional(total, weights){
   for(let i=0;i<remainder && order.length>0;i++){ order[i % order.length].value++; }
   return floors;
 }
+// ---- Dedicated units ----
+// A task's "Dedicated" list: people who work it every day it's needed instead of rotating onto
+// it. Stored per team copy as member ids; Grand Tasks writes one department-wide list to every
+// team's copy of a shared task, so each team's run places its own people from the same list.
+function dedicatedIdsOf(task){ return Array.isArray(task && task.dedicated) ? task.dedicated : []; }
+
 function grandTaskGroups(deptId){
   // { lowercasedName: { displayName, perTeam: [{team, task}] } } — scoped to one department's
   // teams. Tasks are matched by name across teams since each team's task list is still its
@@ -7482,6 +7500,7 @@ async function renderGrandTasksTab(){
     <th class="gt-ms" title="By task name — applied to whichever team actually has a matching task">Cannot combine with</th>
     <th class="gt-ms" title="By task name — applied to whichever team actually has a matching task">Combine with</th>
     <th class="gt-flag" title="The scheduler picks one person to cover every day this task is needed that week">Same all week</th>
+    <th class="gt-ms" title="A fixed unit from any team here: they work this task every day it's needed, whatever the number; rotation covers anything above them. Other tasks use them only when nobody else can.">Dedicated</th>
     <th class="gt-link" title="Where this task is actually worked. The task name becomes a link to it on every schedule, for every team here.">Link</th>
     <th class="gt-actions"></th>
   </tr></thead><tbody>`;
@@ -7498,6 +7517,14 @@ async function renderGrandTasksTab(){
     const sampleExcludes = Array.isArray(sample.excludes) ? sample.excludes : (sample.excludes ? [sample.excludes] : []);
     const sampleCombine = Array.isArray(sample.combineWith) ? sample.combineWith : (sample.combineWith ? [sample.combineWith] : []);
     const onAll = g.perTeam.length >= teamCount;
+    // Anyone on any team here who is ticked for their own team's copy of this task.
+    const unitNow = new Set();
+    g.perTeam.forEach(({task})=> dedicatedIdsOf(task).forEach(id=> unitNow.add(id)));
+    const unitOptions = [];
+    g.perTeam.forEach(({team, task})=> state.members
+      .filter(m=> m.teamId===team.id && ((m.eligibility && m.eligibility[task.id]) || unitNow.has(m.id)))
+      .forEach(m=> unitOptions.push({ id:m.id, name:`${memberName(m.id)} — ${team.name}` })));
+    unitOptions.sort((a,b)=> a.name.localeCompare(b.name));
     html += `<tr class="grand-task-row" data-key="${escAttr(key)}">
       <td class="gt-name">
         <div class="gt-name-line"><span style="font-weight:600;">${escHtml(g.displayName)}</span></div>
@@ -7509,6 +7536,7 @@ async function renderGrandTasksTab(){
       <td class="gt-ms">${multiSelectDropdownHtml('grand-exclude-select', pairOptions, grandIdsToNameKeys(sampleExcludes, sampleTeamId))}</td>
       <td class="gt-ms">${multiSelectDropdownHtml('grand-combine-select', pairOptions, grandIdsToNameKeys(sampleCombine, sampleTeamId))}</td>
       <td class="gt-flag"><input type="checkbox" class="grand-same-week-check" ${sample.sameAllWeek?'checked':''}></td>
+      <td class="gt-ms">${multiSelectDropdownHtml('grand-dedicated-select', unitOptions, [...unitNow])}</td>
       <td class="gt-link"><input type="url" class="grand-task-link" value="${escAttr(sample.url||'')}" placeholder="Optional"></td>
       <td class="gt-actions"><button type="button" class="btn secondary small btn-grand-remove-task" data-key="${escAttr(key)}">Remove from all</button></td>
     </tr>`;
@@ -7575,6 +7603,7 @@ async function renderGrandTasksTab(){
         const url = row.querySelector('.grand-task-link').value.trim();
         const excludeNames = Array.from(row.querySelectorAll('.grand-exclude-select .ms-dropdown-menu input:checked')).map(c=>c.value);
         const combineNames = Array.from(row.querySelectorAll('.grand-combine-select .ms-dropdown-menu input:checked')).map(c=>c.value);
+        const dedicated = Array.from(row.querySelectorAll('.grand-dedicated-select .ms-dropdown-menu input:checked')).map(c=>c.value);
         const displayFor = new Map(grandPairingOptions(g).map(o=>[o.id, o.name]));
         for(const {team, task} of g.perTeam){
           if(task.grandOverride===true) continue; // this team's copy stays fully independent
@@ -7595,6 +7624,7 @@ async function renderGrandTasksTab(){
           task.url = url;
           task.excludes = resolveNames(excludeNames);
           task.combineWith = resolveNames(combineNames);
+          task.dedicated = [...dedicated]; // the whole department's unit, on every copy
           touchedTeamIds.add(team.id);
         }
       }
@@ -7784,30 +7814,20 @@ document.getElementById('btn-grand-update-sched').addEventListener('click', ()=>
   const teams = teamsInDepartment(currentDepartmentId);
   if(teams.length===0){ showToast('No teams in this department yet'); return; }
   askConfirm(
-    `Update the schedule for ${fmtWeek(grandWeekMonday)} against current rules, across every team in this department — ${teams.map(t=>t.name).join(', ')}? Anyone still valid on each team stays exactly where they are; anyone no longer valid gets dropped, and anything still short gets filled — same as Update on a single team's Schedule tab, just for all of them at once.`,
+    `Update the schedule for ${fmtWeek(grandWeekMonday)} against current rules, across every team in this department — ${teams.map(t=>t.name).join(', ')}? Anyone still valid stays where they are. Anyone no longer valid (not eligible, wrong level, on holiday, a clash with "Cannot combine with") is taken off, extra people come off where a number went down, and anything short gets filled. Dedicated units are always kept on. Shared tasks are redone across the whole department, the same way Generate does them.`,
     'Update for all teams',
     async ()=>{
       const statusEl = document.getElementById('grand-sched-status');
       statusEl.textContent = 'Updating…';
-      const snapshots = {};
       const weekISO = iso(grandWeekMonday);
-      for(const team of teams){
-        statusEl.textContent = `Updating — ${team.name}…`;
-        await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
-          snapshots[team.id] = JSON.parse(JSON.stringify(currentSchedule));
-          balanceCache = null;
-          const sched = await generateWeek(grandWeekMonday, { mode:'update', keepSchedule: snapshots[team.id] });
-          currentSchedule = sched;
-          await saveWeek(iso(currentWeekMonday), sched, { op:'update' });
-        });
-      }
+      const result = await updateWeekForTeams(teams.map(t=>t.id), grandWeekMonday, currentDepartmentId, null, statusEl);
       statusEl.textContent = '';
       balanceCache = null;
-      logAudit('grand_schedule.update_all', { department: currentDepartmentId, teams: teams.map(t=>t.name).join(', '), week: weekISO });
+      logAudit('grand_schedule.update_all', { department: currentDepartmentId, teams: teams.map(t=>t.name).join(', '), week: weekISO, added: result.added, removed: result.removed });
       pushUndo(async ()=>{
-        for(const team of teams){
-          await withBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
-            currentSchedule = snapshots[team.id] || {};
+        for(const [tid, snap] of Object.entries(result.snapshots)){
+          await withBorrowedTeamContext(tid, grandWeekMonday, async ()=>{
+            currentSchedule = snap || {};
             await saveWeek(weekISO, currentSchedule, { op:'undo' });
           });
         }
@@ -7815,7 +7835,7 @@ document.getElementById('btn-grand-update-sched').addEventListener('click', ()=>
         renderGrandScheduleGrid();
         showToast('Restored');
       });
-      showToast(`Updated schedules for ${teams.length} team${teams.length===1?'':'s'}`, undoLast);
+      showToast(updateSummaryText(result), undoLast);
       renderGrandScheduleGrid();
     }
   );
@@ -8436,7 +8456,7 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
             }).join('');
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
           <button class="bar ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${escAttr(team.name)}${isSick?' — out of office, consider replacing':' — click to see options'}">
-            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, departmentMemberIds(currentDepartmentId)))}</span></span>
+            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, departmentMemberIds(currentDepartmentId)))}</span>${dedicatedIdsOf(task).includes(mid)?'<span class="unit-pin" title="Dedicated to this task">📌</span>':''}</span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">
             <button class="bar-menu-item" data-action="delete">${runDates.length>1?'Delete — whole run':'Delete'}</button>
@@ -8970,7 +8990,11 @@ async function computeBalanceForTeam(teamId){
 // must already hold each team's own, already-generated (non-shared) assignments for this same
 // week, so this can correctly account for what everyone's already committed to elsewhere that
 // day before adding a shared-task assignment on top.
-async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSchedules){
+async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSchedules, opts){
+  // opts.mode 'update' starts from opts.keepByTeam (each team's week as it was before), keeps
+  // whoever is still valid, takes extra people off a lower number, and fills what's short.
+  const mode = (opts && opts.mode) || 'full';
+  const keepByTeam = (opts && opts.keepByTeam) || {};
   const nameKey = (g.displayName||'').trim().toLowerCase();
   const balances = {};
   for(const {team} of g.perTeam){ balances[team.id] = await computeBalanceForTeam(team.id); }
@@ -9015,6 +9039,26 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
     b[entry.member.id][entry.task.id] = (b[entry.member.id][entry.task.id]||0) + 1;
   }
   function balanceFor(entry){ return (balances[entry.team.id]?.[entry.member.id]?.[entry.task.id]) || 0; }
+  // The unit is one list for the whole department (Grand Tasks writes it to every copy).
+  const unitIds = new Set();
+  g.perTeam.forEach(({task})=> dedicatedIdsOf(task).forEach(id=> unitIds.add(id)));
+  const isUnit = entry=> unitIds.has(entry.member.id);
+  // Someone dedicated to a different task is used here only when nobody else can be.
+  const reservedEntry = entry=> (!isUnit(entry) && (state.tasksByTeam[entry.team.id]||[])
+    .some(t=> t.id!==entry.task.id && dedicatedIdsOf(t).includes(entry.member.id))) ? 1 : 0;
+  const unitEntriesFor = dISO=> pool.filter(entry=> isUnit(entry) && entry.member.eligibility[entry.task.id]
+    && !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO));
+  // Update: who was on it before and may stay — the fairest first, so a lower number keeps them.
+  const keptEntriesFor = (dISO, exclude)=> {
+    if(mode!=='update') return [];
+    const out = pool.filter(entry=>
+      !exclude.some(e=> e.member.id===entry.member.id)
+      && ((((keepByTeam[entry.team.id]||{})[dISO]||{})[entry.task.id])||[]).includes(entry.member.id)
+      && entry.member.eligibility[entry.task.id] && levelAllowed(entry.task, entry.member.levels)
+      && !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO));
+    out.sort((a,b)=> balanceFor(a)-balanceFor(b) || a.member.name.localeCompare(b.member.name));
+    return out;
+  };
   // Same "combine with" behavior as the main generator, applied here too — a person picked
   // through this department-wide rotation still gets their second task, scoped to their own
   // team's own task list, since combine-with (like exclusions) always stays local per team
@@ -9071,23 +9115,32 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
       markAssigned(entry, dISO);
       applyCombineWith(entry, dISO);
     });
+    // The unit first, every needed day; then, on Update, whoever was already on it, up to the number.
+    neededDays.forEach(dISO=>{
+      unitEntriesFor(dISO).forEach(entry=> place(entry, [dISO]));
+      const room = (grandReqForKey[DAYS[dates.indexOf(dISO)]]||0) - onDay[dISO].length;
+      keptEntriesFor(dISO, onDay[dISO]).slice(0, Math.max(0, room)).forEach(entry=> place(entry, [dISO]));
+    });
+    const placedIds = ()=> new Set(neededDays.flatMap(dISO=> onDay[dISO].map(e=>e.member.id)));
     // Whoever can cover the most of the week comes first, so the row stays one bar wherever
     // that's possible, then whoever has done this task least. Someone away for part of the
     // week takes the days they are around for instead of being passed over for all of them.
+    const already = placedIds();
     let candidates = pool.filter(entry=>
       entry.member.eligibility[entry.task.id] && levelAllowed(entry.task, entry.member.levels)
-      && freeDaysFor(entry).length > 0
+      && !already.has(entry.member.id) && freeDaysFor(entry).length > 0
     );
     const coverage = {};
     candidates.forEach(entry=>{ coverage[entry.member.id] = freeDaysFor(entry).length; });
     candidates.sort((a,b)=>{
+      if(reservedEntry(a)!==reservedEntry(b)) return reservedEntry(a)-reservedEntry(b);
       if(coverage[a.member.id]!==coverage[b.member.id]) return coverage[b.member.id]-coverage[a.member.id];
       const ca = balanceFor(a), cb = balanceFor(b);
       if(ca!==cb) return ca-cb;
       return a.member.name.localeCompare(b.member.name);
     });
-    candidates = shuffleTiedGroups(candidates, entry=> `${coverage[entry.member.id]}_${balanceFor(entry)}`);
-    candidates.slice(0, need).forEach(entry=> place(entry, freeDaysFor(entry)));
+    candidates = shuffleTiedGroups(candidates, entry=> `${reservedEntry(entry)}_${coverage[entry.member.id]}_${balanceFor(entry)}`);
+    candidates.slice(0, Math.max(0, need - already.size)).forEach(entry=> place(entry, freeDaysFor(entry)));
 
     // Days left short by an absence get filled one day at a time, so the shared task is
     // genuinely covered even though the week no longer reads as a single bar.
@@ -9099,13 +9152,14 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
           && !isOnThatDay(entry, dISO) && !isOnHoliday(entry.member.id, dISO) && canAssign(entry, dISO));
         if(dayPool.length===0) break;
         dayPool.sort((a,b)=>{
+          if(reservedEntry(a)!==reservedEntry(b)) return reservedEntry(a)-reservedEntry(b);
           const la = existingLoad(a.member.id, dISO).length, lb = existingLoad(b.member.id, dISO).length;
           if(la!==lb) return la-lb;
           const ca = balanceFor(a), cb = balanceFor(b);
           if(ca!==cb) return ca-cb;
           return a.member.name.localeCompare(b.member.name);
         });
-        dayPool = shuffleTiedGroups(dayPool, entry=> `${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
+        dayPool = shuffleTiedGroups(dayPool, entry=> `${reservedEntry(entry)}_${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
         place(dayPool[0], [dISO]);
       }
     });
@@ -9127,20 +9181,26 @@ async function generateSharedTaskPoolForWeek(g, dates, grandReqForKey, teamSched
       return;
     }
     const need = grandReqForKey[dayKey];
+    // The unit always; then, on Update, whoever was already on it, up to the number.
+    const picked = [];
+    const take = entry=>{ markAssigned(entry, dISO); applyCombineWith(entry, dISO); picked.push(entry); };
+    unitEntriesFor(dISO).forEach(take);
+    keptEntriesFor(dISO, picked).slice(0, Math.max(0, need - picked.length)).forEach(take);
     let candidates = pool.filter(entry=>
-      !isOnHoliday(entry.member.id, dISO) && entry.member.eligibility[entry.task.id]
+      !picked.some(p=> p.member.id===entry.member.id)
+      && !isOnHoliday(entry.member.id, dISO) && entry.member.eligibility[entry.task.id]
       && levelAllowed(entry.task, entry.member.levels) && canAssign(entry, dISO)
     );
     candidates.sort((a,b)=>{
+      if(reservedEntry(a)!==reservedEntry(b)) return reservedEntry(a)-reservedEntry(b);
       const loadA = existingLoad(a.member.id, dISO).length, loadB = existingLoad(b.member.id, dISO).length;
       if(loadA!==loadB) return loadA-loadB;
       const ca = balanceFor(a), cb = balanceFor(b);
       if(ca!==cb) return ca-cb;
       return a.member.name.localeCompare(b.member.name);
     });
-    candidates = shuffleTiedGroups(candidates, entry=> `${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
-    const picked = candidates.slice(0, need);
-    picked.forEach(entry=>{ markAssigned(entry, dISO); applyCombineWith(entry, dISO); });
+    candidates = shuffleTiedGroups(candidates, entry=> `${reservedEntry(entry)}_${existingLoad(entry.member.id, dISO).length}_${balanceFor(entry)}`);
+    candidates.slice(0, Math.max(0, need - picked.length)).forEach(take);
     g.perTeam.forEach(({team})=>{
       resultsByTeam[team.id][dISO] = picked.filter(entry=>entry.team.id===team.id).map(entry=>entry.member.id);
     });
@@ -9187,6 +9247,53 @@ async function generateWeek(weekMon, opts){
     return true;
   }
   function bump(mid, taskId){ bal[mid]=bal[mid]||{}; bal[mid][taskId]=(bal[mid][taskId]||0)+1; }
+  function unmark(mid, d, taskId){
+    if(assignedByDay[d][mid]) assignedByDay[d][mid] = assignedByDay[d][mid].filter(t=>t!==taskId);
+    if(bal[mid] && bal[mid][taskId]) bal[mid][taskId]--;
+  }
+
+  // Dedicated units: people set on a task's "Dedicated" list work it every day it's needed,
+  // whatever the number, and count toward its requirement first; rotation covers the rest.
+  // Elsewhere they're a last resort — another task only takes them when nobody else can.
+  const teamIds = new Set(teamMembers().map(m=>m.id));
+  const unitOf = {};
+  const dedicatedSomewhere = new Set();
+  state.tasks.forEach(t=>{
+    unitOf[t.id] = new Set(dedicatedIdsOf(t).filter(mid=> teamIds.has(mid)));
+    unitOf[t.id].forEach(mid=> dedicatedSomewhere.add(mid));
+  });
+  const reserved = (m, task)=> (dedicatedSomewhere.has(m.id) && !unitOf[task.id].has(m.id)) ? 1 : 0;
+  const unitPlaced = {}; dates.forEach(d=> unitPlaced[d] = {});
+  const unitOn = (dISO, taskId)=> unitPlaced[dISO][taskId] || [];
+
+  // Update: who stays when a day now has more people than it needs. The unit always stays;
+  // of the rest, whoever has done this task least keeps it, so the trim is as fair as a pick.
+  function trimToRequirement(dISO, task, ids){
+    const unit = unitOn(dISO, task.id);
+    const dayKey = dayKeyOf(dISO);
+    const lv = (reqLevelsOf(task.id)||{})[dayKey] || {};
+    const hasLv = Object.values(lv).some(v=>v>0);
+    const memberOf = mid=> teamMembers().find(m=>m.id===mid);
+    const others = ids.filter(mid=> !unit.includes(mid)).map(memberOf).filter(Boolean);
+    others.sort((a,b)=> ((bal[a.id]||{})[task.id]||0) - ((bal[b.id]||{})[task.id]||0)
+      || existingTasks(a.id, dISO).length - existingTasks(b.id, dISO).length
+      || a.name.localeCompare(b.name));
+    const keep = [];
+    if(hasLv){
+      const unitMembers = unit.map(memberOf).filter(Boolean);
+      const have = lvl=> [...unitMembers, ...keep].filter(m=>(m.levels||[]).includes(lvl)).length;
+      others.forEach(m=>{ if(LEVELS.some(l=> (lv[l]||0) > have(l) && (m.levels||[]).includes(l))) keep.push(m); });
+    } else {
+      keep.push(...others.slice(0, Math.max(0, (reqOf(task.id)[dayKey]||0) - unit.length)));
+    }
+    others.filter(m=> !keep.includes(m)).forEach(m=> unmark(m.id, dISO, task.id));
+    return [...unit, ...keep.map(m=>m.id)];
+  }
+  // Update: is someone already on the schedule still allowed to be there?
+  function stillValid(m, task, dISO){
+    return !!m && !!m.eligibility[task.id] && levelAllowed(task, m.levels)
+      && !isOnHoliday(m.id, dISO) && canAssign(m, task, dISO);
+  }
 
   // Fill/Update: whatever's already on the schedule for this task/day is kept as a starting
   // point instead of being wiped — Update additionally drops anyone no longer valid (removed
@@ -9194,19 +9301,19 @@ async function generateWeek(weekMon, opts){
   // kept people as assigned/bumped immediately so day-load and fairness calculations treat
   // them exactly like a normal pick, before any new candidates are considered.
   function seedKept(dISO, task){
-    if(mode==='full') return [];
-    const already = (keepSchedule[dISO] && keepSchedule[dISO][task.id]) || [];
-    let kept = already;
-    if(mode==='update'){
-      kept = already.filter(mid=>{
-        const m = state.members.find(x=>x.id===mid);
-        if(!m || !m.eligibility[task.id]) return false;
-        if(isOnHoliday(mid, dISO)) return false;
-        return true;
-      });
-    }
-    kept.forEach(mid=>{ markAssigned(mid, dISO, task.id); bump(mid, task.id); });
-    return kept;
+    const unit = unitOn(dISO, task.id).slice(); // already placed, see the unit pass below
+    if(mode==='full') return unit;
+    const already = ((keepSchedule[dISO] && keepSchedule[dISO][task.id]) || []).filter(mid=> !unit.includes(mid));
+    const kept = [];
+    already.forEach(mid=>{
+      // Checked one at a time, after the ones before are placed, so "cannot combine with"
+      // sees everything already on the person that day.
+      if(mode==='update' && !stillValid(teamMembers().find(x=>x.id===mid), task, dISO)) return;
+      markAssigned(mid, dISO, task.id); bump(mid, task.id);
+      kept.push(mid);
+    });
+    const all = [...unit, ...kept];
+    return mode==='update' ? trimToRequirement(dISO, task, all) : all;
   }
 
   // Grand Schedule's Generate uses this to skip a shared task on this team's own run
@@ -9217,6 +9324,25 @@ async function generateWeek(weekMon, opts){
   const tasksSorted = [...state.tasks].filter(t=> !excludeNames.has((t.name||'').trim().toLowerCase())).sort((a,b)=> eligibleCount(a)-eligibleCount(b));
   const weeklyTasks = tasksSorted.filter(t=>t.sameAllWeek);
   const normalTasks = tasksSorted.filter(t=>!t.sameAllWeek);
+
+  // The units go on first, before any rotation, so every pick after this sees them.
+  tasksSorted.forEach(task=>{
+    const unit = unitOf[task.id];
+    if(!unit || unit.size===0) return;
+    dates.forEach(d=>{
+      if(isBankHoliday(d)) return;
+      const dayKey = dayKeyOf(d);
+      const needed = (reqOf(task.id)[dayKey]||0) > 0
+        || (!task.sameAllWeek && Object.values(((reqLevelsOf(task.id)||{})[dayKey])||{}).some(v=>v>0));
+      if(!needed) return;
+      unit.forEach(mid=>{
+        const m = teamMembers().find(x=>x.id===mid);
+        if(!m || !m.eligibility[task.id] || isOnHoliday(mid, d) || !canAssign(m, task, d)) return;
+        markAssigned(mid, d, task.id); bump(mid, task.id);
+        (unitPlaced[d][task.id] = unitPlaced[d][task.id] || []).push(mid);
+      });
+    });
+  });
 
   // Pass 1 — tasks meant to be the same people every day they're needed this week (e.g. QA).
   // "Same all week" is the shape the week is built in, not a promise that nobody can be away:
@@ -9243,7 +9369,7 @@ async function generateWeek(weekMon, opts){
     // Who ends up on the task each needed day. Everything below writes through place(), so a
     // person can hold some days of the week without holding all of them.
     const onDay = {};
-    neededDays.forEach(d=> onDay[d] = []);
+    neededDays.forEach(d=> onDay[d] = unitOn(d, task.id).slice());
     const place = (m, days)=> days.forEach(d=>{
       if(onDay[d] && !onDay[d].includes(m.id)){
         onDay[d].push(m.id);
@@ -9259,11 +9385,12 @@ async function generateWeek(weekMon, opts){
       const coverage = {};
       pool.forEach(m=> coverage[m.id] = freeDaysFor(m).length);
       pool.sort((a,b)=>{
+        if(reserved(a,task)!==reserved(b,task)) return reserved(a,task)-reserved(b,task);
         if(coverage[a.id]!==coverage[b.id]) return coverage[b.id]-coverage[a.id];
         const ca=(bal[a.id]&&bal[a.id][task.id])||0, cb=(bal[b.id]&&bal[b.id][task.id])||0;
         return ca-cb || a.name.localeCompare(b.name);
       });
-      return shuffleTiedGroups(pool, m=> `${coverage[m.id]}_${(bal[m.id]&&bal[m.id][task.id])||0}`);
+      return shuffleTiedGroups(pool, m=> `${reserved(m,task)}_${coverage[m.id]}_${(bal[m.id]&&bal[m.id][task.id])||0}`);
     };
 
     // Fill/Update keeps what's already on the task, day by day. Partial coverage is a
@@ -9272,9 +9399,11 @@ async function generateWeek(weekMon, opts){
     if(mode!=='full'){
       teamMembers().forEach(m=>{
         let days = neededDays.filter(d=> ((keepSchedule[d]&&keepSchedule[d][task.id])||[]).includes(m.id));
-        if(mode==='update') days = m.eligibility[task.id] ? days.filter(d=> !isOnHoliday(m.id,d)) : [];
+        if(mode==='update') days = days.filter(d=> !onDay[d].includes(m.id) && stillValid(m, task, d));
         if(days.length) place(m, days);
       });
+      // A lower number this week: take the extra people back off, day by day.
+      if(mode==='update') neededDays.forEach(d=>{ onDay[d] = trimToRequirement(d, task, onDay[d]); });
     }
 
     // Each new person takes every day of the run they're free for — all of it when they're
@@ -9307,10 +9436,11 @@ async function generateWeek(weekMon, opts){
             && !isOnHoliday(m.id,d) && canAssign(m, task, d) && (extraFilter ? extraFilter(m) : true));
           if(pool.length===0) return;
           pool.sort((a,b)=>{
+            if(reserved(a,task)!==reserved(b,task)) return reserved(a,task)-reserved(b,task);
             const ca=(bal[a.id]&&bal[a.id][task.id])||0, cb=(bal[b.id]&&bal[b.id][task.id])||0;
             return ca-cb || a.name.localeCompare(b.name);
           });
-          pool = shuffleTiedGroups(pool, m=> (bal[m.id]&&bal[m.id][task.id])||0);
+          pool = shuffleTiedGroups(pool, m=> `${reserved(m,task)}_${(bal[m.id]&&bal[m.id][task.id])||0}`);
           place(pool[0], [d]);
         }
       };
@@ -9340,6 +9470,7 @@ async function generateWeek(weekMon, opts){
 
       const sortAndShuffle = (pool)=>{
         pool.sort((a,b)=>{
+          if(reserved(a,task)!==reserved(b,task)) return reserved(a,task)-reserved(b,task);
           const loadA = existingTasks(a.id, dISO).length, loadB = existingTasks(b.id, dISO).length;
           if(loadA!==loadB) return loadA-loadB;
           const ca = (bal[a.id]&&bal[a.id][task.id]) || 0;
@@ -9347,7 +9478,7 @@ async function generateWeek(weekMon, opts){
           if(ca!==cb) return ca-cb;
           return a.name.localeCompare(b.name);
         });
-        return shuffleTiedGroups(pool, m=> `${existingTasks(m.id, dISO).length}_${(bal[m.id]&&bal[m.id][task.id])||0}`);
+        return shuffleTiedGroups(pool, m=> `${reserved(m,task)}_${existingTasks(m.id, dISO).length}_${(bal[m.id]&&bal[m.id][task.id])||0}`);
       };
 
       if(hasLevelBreakdown){
@@ -10387,7 +10518,7 @@ function buildScheduleTableHtml(teamId){
         const isSick = run.dates.some(d=> ((state.holidayReasons[mid]||{})[d]) === 'sick');
         html += `<div class="bar-item">
           <button class="bar ${assigned.length>need?'short':''} ${isMe?'me':''} ${isSick?'needs-replace':''}" data-mid="${mid}" style="background:${pColor.bg}; color:${pColor.fg};" title="${isSick?'Out of office — consider replacing':'Click to see options'}">
-            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span>${isMe?'<span class="you-tag">you</span>':''}</span>
+            <span class="bar-name">${isSick?'<span class="sick-badge" style="background:'+overlay+';">!</span> ':''}<span class="bar-name-text ${isPendingDisplayName(mid)?'pending':''}">${escHtml(shortDisplayName(mid, scopeIds))}</span>${dedicatedIdsOf(task).includes(mid)?'<span class="unit-pin" title="Dedicated to this task">📌</span>':''}${isMe?'<span class="you-tag">you</span>':''}</span>
           </button>
           <div class="bar-menu" data-mid="${mid}" style="background:color-mix(in srgb, ${pColor.bg} 45%, white); color:${pColor.fg==='#EDFFE9'?'var(--ink)':pColor.fg};">${mainBarMenuHtml(task.id, run.dates, mid, assigned)}</div>
         </div>`;
@@ -11157,27 +11288,110 @@ document.getElementById('btn-fill-in').addEventListener('click', ()=>{
   });
 });
 document.getElementById('btn-update-sched').addEventListener('click', ()=>{
-  askConfirm(`Update the schedule for ${fmtWeek(currentWeekMonday)} against current rules? Anyone still valid (still eligible, not on holiday) stays exactly where they are. Anyone no longer valid gets dropped, and anything still short of its requirement gets filled — same fairness logic as Generate, just applied only to what actually needs to change.`, 'Update', async ()=>{
-    const snapshot = JSON.parse(JSON.stringify(currentSchedule));
-    document.getElementById('sched-status').textContent = 'Updating…';
-    balanceCache = null;
-    const sched = await generateWeek(currentWeekMonday, { mode:'update', keepSchedule: snapshot });
-    currentSchedule = sched;
-    const weekISO = iso(currentWeekMonday);
-    await saveWeek(weekISO, sched, { op:'update' });
-    document.getElementById('sched-status').textContent = '';
+  askConfirm(`Update the schedule for ${fmtWeek(currentWeekMonday)} against current rules? Anyone still valid stays exactly where they are. Anyone no longer valid (not eligible, wrong level, on holiday, a clash with "Cannot combine with") is taken off, extra people come off where a number went down, and anything still short gets filled — same fairness logic as Generate. Dedicated units are always kept on.`, 'Update', async ()=>{
+    const weekMonday = currentWeekMonday;
+    const weekISO = iso(weekMonday);
+    const statusEl = document.getElementById('sched-status');
+    statusEl.textContent = 'Updating…';
+    const myTeam = state.teams.find(t=>t.id===currentTeamId);
+    const deptId = myTeam && teamFollowsDepartment(currentTeamId) ? myTeam.departmentId : null;
+    const result = await updateWeekForTeams([currentTeamId], weekMonday, deptId, currentTeamId, statusEl);
+    currentSchedule = result.teamSchedules[currentTeamId];
+    statusEl.textContent = '';
     balanceCache = null;
     drawScheduleGrid();
     pushUndo(async ()=>{
-      currentSchedule = snapshot;
-      await saveWeek(weekISO, snapshot, { op:'undo' });
+      for(const [tid, snap] of Object.entries(result.snapshots)){
+        await withBorrowedTeamContext(tid, weekMonday, async ()=>{
+          currentSchedule = snap;
+          await saveWeek(weekISO, snap, { op:'undo' });
+        });
+      }
+      currentSchedule = result.snapshots[currentTeamId];
       balanceCache = null;
       drawScheduleGrid();
       showToast('Restored');
     });
-    showToast('Schedule updated', undoLast);
+    showToast(updateSummaryText(result), undoLast);
   });
 });
+// Update for one team (its Schedule tab) or several (Grand schedule). Each team's own tasks are
+// updated on its own; a task shared department-wide is redone once across every team that has
+// it, from what everyone had before, exactly as Generate rotates it. Returns the before/after
+// of every team touched, and how many assignments were added and removed in total.
+async function updateWeekForTeams(teamIds, weekMonday, deptId, mustIncludeTeamId, statusEl){
+  const weekISO = iso(weekMonday);
+  const dates = DAYS.map((d,i)=> iso(addDays(weekMonday,i)));
+  let sharedGroups = [];
+  if(deptId){
+    await loadGrandReqTotals(deptId, weekISO);
+    sharedGroups = Object.entries(grandTaskGroups(deptId))
+      .map(([key, g])=> [key, { ...g, perTeam: g.perTeam.filter(pt=> teamFollowsDepartment(pt.team.id)) }])
+      .filter(([key, g])=>
+        (!mustIncludeTeamId || g.perTeam.some(pt=>pt.team.id===mustIncludeTeamId))
+        && g.perTeam.length > 1
+        && grandReqTotals[key] && Object.values(grandReqTotals[key]).some(v=>v>0));
+  }
+  const excludeTaskNames = new Set(sharedGroups.map(([key])=>key));
+  const involved = new Set(teamIds);
+  sharedGroups.forEach(([key, g])=> g.perTeam.forEach(pt=> involved.add(pt.team.id)));
+
+  const snapshots = {}, teamSchedules = {};
+  for(const tid of involved){
+    const team = state.teams.find(t=>t.id===tid);
+    if(statusEl && team) statusEl.textContent = `Updating — ${team.name}…`;
+    await withBorrowedTeamContext(tid, weekMonday, async ()=>{
+      snapshots[tid] = JSON.parse(JSON.stringify(currentSchedule||{}));
+      balanceCache = null;
+      teamSchedules[tid] = teamIds.includes(tid)
+        ? await generateWeek(weekMonday, { mode:'update', keepSchedule: snapshots[tid], excludeTaskNames })
+        : JSON.parse(JSON.stringify(currentSchedule||{})); // only its shared tasks change, below
+    });
+  }
+  if(sharedGroups.length>0){
+    if(statusEl) statusEl.textContent = 'Updating shared tasks across the department…';
+    // The shared tasks are rebuilt below, so they mustn't count as anyone's load meanwhile.
+    for(const [key, g] of sharedGroups){
+      g.perTeam.forEach(({team, task})=> dates.forEach(dISO=>{
+        const week = teamSchedules[team.id] = teamSchedules[team.id] || {};
+        week[dISO] = week[dISO] || {};
+        delete week[dISO][task.id];
+      }));
+    }
+    for(const [key, g] of sharedGroups){
+      const resultsByTeam = await generateSharedTaskPoolForWeek(g, dates, grandReqTotals[key], teamSchedules, { mode:'update', keepByTeam: snapshots });
+      g.perTeam.forEach(({team, task})=> dates.forEach(dISO=>{
+        teamSchedules[team.id][dISO][task.id] = resultsByTeam[team.id][dISO] || [];
+      }));
+    }
+  }
+  for(const tid of involved){
+    await withBorrowedTeamContext(tid, weekMonday, async ()=>{
+      currentSchedule = teamSchedules[tid];
+      await saveWeek(weekISO, currentSchedule, { op:'update' });
+    });
+  }
+  let added = 0, removed = 0;
+  for(const tid of involved){
+    const before = snapshots[tid] || {}, after = teamSchedules[tid] || {};
+    dates.forEach(dISO=>{
+      const taskIds = new Set([...Object.keys(before[dISO]||{}), ...Object.keys(after[dISO]||{})]);
+      taskIds.forEach(taskId=>{
+        const b = new Set(((before[dISO]||{})[taskId])||[]), a = new Set(((after[dISO]||{})[taskId])||[]);
+        a.forEach(mid=>{ if(!b.has(mid)) added++; });
+        b.forEach(mid=>{ if(!a.has(mid)) removed++; });
+      });
+    });
+  }
+  return { snapshots, teamSchedules, added, removed };
+}
+function updateSummaryText(r){
+  if(!r.added && !r.removed) return 'Already up to date — nothing needed changing';
+  const parts = [];
+  if(r.removed) parts.push(`${r.removed} taken off`);
+  if(r.added) parts.push(`${r.added} added`);
+  return `Schedule updated — ${parts.join(', ')}`;
+}
 document.getElementById('btn-send-notifications').addEventListener('click', ()=>{
   const dirtyCount = pendingNotifyWeeks[currentTeamId] ? pendingNotifyWeeks[currentTeamId].size : 0;
   if(dirtyCount===0){ showToast('Nothing to send — no unsent changes for this team'); return; }

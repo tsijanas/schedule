@@ -5,6 +5,18 @@ starts from there: `git log <that commit>..HEAD --oneline` lists everything adde
 
 ## Next round — starts after `0fb2952` (22 Sep 2026)
 
+- **Dedicated units** — a task's new **Dedicated** column (Tasks, and Grand Tasks for a whole
+  department) names people who work it every day it's needed, whatever the number; rotation
+  covers anything above them, and other tasks use them only when nobody else can. Marked 📌.
+- **Update follows the rules both ways** — a lower number now takes the extra people off (the
+  ones who've done it most), and anyone now on the wrong level or clashing with "Cannot combine
+  with" comes off too. Grand schedule's Update redoes shared tasks department-wide, as Generate
+  does. It says how many were taken off and added.
+- **Viewers** — My schedule shows who else is on your tasks (department-wide with Grand on);
+  My holidays opens on your own time off with a summary, and an Everyone switch.
+- **Nightly backup** — a script for Google Drive plus email; Admins set where it goes in Data.
+- **Safety** — a failed load stops with a message instead of saving an empty team list.
+
 - **App icon** — installing the tool now shows the app's own mark (the sidebar's wave and dot,
   on teal) instead of a letter on a grey square. The icons and `manifest.json` existed in the
   repo but were never copied into the container, so the deployed site served none of them; the

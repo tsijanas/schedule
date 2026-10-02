@@ -1,4 +1,4 @@
-build: 2026-10-01e
+build: 2026-10-02a
 includes:
   - app icon + manifest actually shipped in the image
   - cache headers (deploys visible without a hard refresh) and the security headers restored
@@ -13,3 +13,4 @@ includes:
   - My schedule: "On the same tasks" shows colleagues (department-wide when Grand is on), not you
   - My holidays: "Your time off" summary, and the calendar opens on Only me with an Everyone switch
   - birthday names in the day headers wrap instead of being cut off
+  - Dedicated units on tasks; Update removes extra people and re-checks levels and clashes
