@@ -8663,6 +8663,9 @@ async function renderGrandScheduleGrid(){
   wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">Loading…</div>`;
   const teams = teamsInDepartment(currentDepartmentId);
   if(teams.length===0){ wrap.innerHTML = `<div class="muted" style="font-size:12.5px;">No teams in this department yet.</div>`; return; }
+  // Every team's tasks, whichever team the sidebar is on: a team whose tasks weren't loaded yet
+  // had its people silently missing from every row here.
+  await ensureTeamDataLoaded(teams.map(t=>t.id));
 
   const weekISO = iso(grandWeekMonday);
   const dates = DAYS.map((d,i)=> iso(addDays(grandWeekMonday,i)));

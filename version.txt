@@ -1,4 +1,4 @@
-build: 2026-10-06b
+build: 2026-10-06c
 includes:
   - app icon + manifest actually shipped in the image
   - cache headers (deploys visible without a hard refresh) and the security headers restored
@@ -16,3 +16,4 @@ includes:
   - Dedicated units on tasks; Update removes extra people and re-checks levels and clashes
   - Grand schedule: after a change, every row's + list is rebuilt, so someone taken off one task can be added to another
   - Grand schedule no longer leaves the app on the wrong team (wrong people offered on both schedules)
+  - Grand schedule loads every team in the department first, so its lists never depend on the sidebar team
