@@ -8622,25 +8622,37 @@ function wireGrandScheduleRow(rowEl){
     });
   });
 }
-// Rebuilds and swaps in just the one row that changed — this is the actual fix for "the whole
-// page reloads": every edit used to call the full renderGrandScheduleGrid(), re-fetching every
-// team's data and rebuilding the entire table for a change that only ever affects one row.
+// After an edit, rebuilds the rows in place rather than the whole table, so the page doesn't
+// flash "Loading…" or lose its scroll. Every row, not just the one edited: who a row's "+" can
+// offer depends on what each person has elsewhere that day ("Cannot combine with", already on
+// it), so taking someone off one task has to make them show up again in every other row.
+// Keeping the other rows as they were is what left people missing from the lists after a
+// remove until the page was reloaded.
 async function refreshOneGrandScheduleRow(key){
   const wrap = document.getElementById('grand-sched-wrap');
-  const oldRow = wrap?.querySelector(`tr[data-gkey="${CSS.escape(key)}"]`);
-  if(!wrap || !oldRow) { await renderGrandScheduleGrid(); return; } // fallback if something's off
+  if(!wrap || !wrap.querySelector(`tr[data-gkey="${CSS.escape(key)}"]`)) { await renderGrandScheduleGrid(); return; }
   const groups = grandTaskGroups(currentDepartmentId);
-  const g = groups[key];
-  if(!g){ await renderGrandScheduleGrid(); return; } // the task itself is gone — needs a full rebuild
+  if(!groups[key]){ await renderGrandScheduleGrid(); return; } // the task itself is gone — needs a full rebuild
   const dates = DAYS.map((d,i)=> iso(addDays(grandWeekMonday,i)));
   const weekISO = iso(grandWeekMonday);
-  const newRowHtml = await buildGrandScheduleRowHtml(key, g, dates, weekISO);
-  const temp = document.createElement('tbody');
-  temp.innerHTML = newRowHtml;
-  const newRow = temp.firstElementChild;
-  enhanceSelectsIn(newRow);
-  oldRow.replaceWith(newRow);
-  wireGrandScheduleRow(newRow);
+  const weekByTeam = {};
+  (await Promise.all(teamsInDepartment(currentDepartmentId).map(async t=> [t.id, await loadWeekForTeam(t.id, weekISO)])))
+    .forEach(([id, sched])=>{ weekByTeam[id] = sched; });
+  const rows = Array.from(wrap.querySelectorAll('tr[data-gkey]'));
+  const built = await Promise.all(rows.map(row=>{
+    const g = groups[row.dataset.gkey];
+    return g ? buildGrandScheduleRowHtml(row.dataset.gkey, g, dates, weekISO, weekByTeam) : null;
+  }));
+  closeAllBarMenus();
+  rows.forEach((oldRow, i)=>{
+    if(!built[i]) return;
+    const temp = document.createElement('tbody');
+    temp.innerHTML = built[i];
+    const newRow = temp.firstElementChild;
+    enhanceSelectsIn(newRow);
+    oldRow.replaceWith(newRow);
+    wireGrandScheduleRow(newRow);
+  });
 }
 async function renderGrandScheduleGrid(){
   updateNotifPendingBadges();
