@@ -8448,10 +8448,10 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
         const showTeamOnCandidates = g.perTeam.length>1;
         const candidatesHtml = candidates.length===0
           ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-          : candidates.map(({member:m, freeDates})=>{
+          : candidates.map(({member:m, freeDates, warning})=>{
               const partial = freeDates.length < runDates.length;
               const teamPart = showTeamOnCandidates ? ` — ${state.teams.find(t=>t.id===m.teamId)?.name||''}` : '';
-              const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${teamPart}${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
+              const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${teamPart}${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}${warningLabel(warning)}`;
               return `<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</button>`;
             }).join('');
         bars += `<div class="bar-item" data-team="${team.id}" data-task="${task.id}" data-dates="${runDates.join(',')}">
@@ -8476,24 +8476,25 @@ async function buildGrandScheduleRowHtml(key, g, dates, weekISO, preloaded){
     // built in one borrowed-context pass rather than one per control.
     const showTeamInLabel = g.perTeam.length>1;
     const dateSets = runDates.length > 1 ? [runDates, ...runDates.map(d=>[d])] : [runDates];
-    const optionsByKey = {};
-    dateSets.forEach(dates=>{ optionsByKey[dates.join(',')] = []; });
+    const optionsByKey = {}, warnedByKey = {}; // free people first, from every team, then the ⚠ ones
+    dateSets.forEach(dates=>{ optionsByKey[dates.join(',')] = []; warnedByKey[dates.join(',')] = []; });
     for(const {team, task} of g.perTeam){
       await readWithBorrowedTeamContext(team.id, grandWeekMonday, async ()=>{
         dateSets.forEach(dates=>{
           const assigned = ((rowTeamData[team.id].sched[dates[0]]||{})[task.id]) || [];
-          eligibleMembersForRunPartial(task.id, dates, assigned).forEach(({member, freeDates})=>{
+          eligibleMembersForRunPartial(task.id, dates, assigned).forEach(({member, freeDates, warning})=>{
             const partial = freeDates.length < dates.length;
             const label = `${memberName(member.id)} (${(member.levels||[]).join('/')})`
               + (showTeamInLabel ? ` — ${team.name}` : '')
-              + (partial ? ` — ${freeDates.map(shortDayLabel).join(', ')} only` : '');
-            optionsByKey[dates.join(',')].push(
+              + (partial ? ` — ${freeDates.map(shortDayLabel).join(', ')} only` : '')
+              + warningLabel(warning);
+            (warning ? warnedByKey : optionsByKey)[dates.join(',')].push(
               `<option value="${team.id}::${task.id}::${member.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</option>`);
           });
         });
       }, rowTeamData[team.id].sched);
     }
-    const addSelectHtml = addControlsHtml(runDates, dates=> (optionsByKey[dates.join(',')]||[]).join(''));
+    const addSelectHtml = addControlsHtml(runDates, dates=> [...(optionsByKey[dates.join(',')]||[]), ...(warnedByKey[dates.join(',')]||[])].join(''));
     let notice = '';
     if(spanned) notice = `<div class="cell-daterange">${DAY_LABELS[DAYS[run.startIdx]].slice(0,3)}–${DAY_LABELS[DAYS[run.endIdx]].slice(0,3)}</div>`;
     else if(shortfall>0) notice = `<div class="cell-shortfall" title="${totalAssigned} of ${totalNeed} filled">needs +${shortfall}</div>`;
@@ -10622,9 +10623,9 @@ function mainBarMenuHtml(taskId, cellDates, excludeMid, currentlyAssigned){
   const candidates = eligibleMembersForRunPartial(taskId, cellDates, (currentlyAssigned||[]).filter(id=>id!==excludeMid));
   const candidatesHtml = candidates.length===0
     ? `<div class="bar-menu-empty">No one else is eligible and free for this.</div>`
-    : candidates.map(({member:m, freeDates})=>{
+    : candidates.map(({member:m, freeDates, warning})=>{
         const partial = freeDates.length < cellDates.length;
-        const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
+        const label = `${m.name || shortDisplayName(m.id, [])} (${(m.levels||[]).join('/')})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}${warningLabel(warning)}`;
         return `<button class="bar-menu-item" data-action="replace-with-pick" data-target="${m.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</button>`;
       }).join('');
   return `<button class="bar-menu-item" data-action="delete">${cellDates.length>1?'Delete — whole run':'Delete'}</button>
@@ -10766,10 +10767,10 @@ async function doReplace(taskId, cellDates, outgoingId){
 // four days. The option carries those days in data-free, and the handler assigns exactly
 // them. A normal single day is just a one-date run, so this covers both cases.
 function eligibleOptionsForRun(taskId, dateISOs, already){
-  return eligibleMembersForRunPartial(taskId, dateISOs, already).map(({member, freeDates})=>{
+  return eligibleMembersForRunPartial(taskId, dateISOs, already).map(({member, freeDates, warning})=>{
     const levels = (member.levels||[]).join('/');
     const partial = freeDates.length < dateISOs.length;
-    const label = `${memberName(member.id)} (${levels})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}`;
+    const label = `${memberName(member.id)} (${levels})${partial?` — ${freeDates.map(shortDayLabel).join(', ')} only`:''}${warningLabel(warning)}`;
     return `<option value="${member.id}" data-free="${freeDates.join(',')}">${escHtml(label)}</option>`;
   });
 }
@@ -10783,18 +10784,40 @@ function eligibleMembersForRun(taskId, dateISOs, already){
 // can take at least one date of the run, each with the dates they're genuinely free on.
 // Callers assign only those dates, so a part-week absence costs someone the days they're away
 // and nothing more.
+//
+// Everyone ticked for the task is offered, not only whoever passes every rule. Someone free on
+// none of the days — on holiday, already on a task that can't be combined with this one, or not
+// a level the task is restricted to — comes last, with `warning` saying why, and can still be
+// picked by hand. Leaving them out entirely meant a week that was already filled in showed far
+// fewer people than an empty one, with no hint as to why.
 function eligibleMembersForRunPartial(taskId, dateISOs, already){
   const task = state.tasks.find(t=>t.id===taskId);
-  const out = [];
+  const out = [], blocked = [];
   teamMembers().forEach(m=>{
-    if(!m.eligibility[taskId] || !levelAllowed(task, m.levels) || (already||[]).includes(m.id)) return;
-    const freeDates = dateISOs.filter(d=>
-      !(((currentSchedule[d]||{})[taskId])||[]).includes(m.id)
-      && !isOnHoliday(m.id,d) && canAssignNow(m, task, d));
-    if(freeDates.length) out.push({ member:m, freeDates });
+    if(!m.eligibility[taskId] || (already||[]).includes(m.id)) return;
+    const notOnIt = dateISOs.filter(d=> !(((currentSchedule[d]||{})[taskId])||[]).includes(m.id));
+    if(notOnIt.length===0) return;
+    const levelOk = levelAllowed(task, m.levels);
+    const freeDates = levelOk ? notOnIt.filter(d=> !isOnHoliday(m.id,d) && canAssignNow(m, task, d)) : [];
+    if(freeDates.length){ out.push({ member:m, freeDates, warning:'' }); return; }
+    blocked.push({ member:m, freeDates: notOnIt, warning: whyNotFree(m, task, notOnIt, levelOk) });
   });
-  return out;
+  return [...out, ...blocked];
 }
+// The reason someone is offered with a ⚠, in a few words.
+function whyNotFree(m, task, dates, levelOk){
+  const reasons = [];
+  if(!levelOk) reasons.push(`${(m.levels||[]).join('/') || 'no level'} not allowed`);
+  if(dates.some(d=> isOnHoliday(m.id, d))) reasons.push('on holiday');
+  const clashes = new Set();
+  dates.forEach(d=> existingTasksForMemberOnDate(m.id, d).forEach(tid=>{
+    const et = state.tasks.find(t=>t.id===tid);
+    if(et && (excludesOf(task).includes(tid) || excludesOf(et).includes(task.id))) clashes.add(et.name);
+  }));
+  if(clashes.size) reasons.push(`on ${[...clashes].join(', ')} (can't combine)`);
+  return reasons.join('; ') || 'not free';
+}
+function warningLabel(warning){ return warning ? ` — ⚠ ${warning}` : ''; }
 // Which weekday an ISO date falls on, and its short label — the grids mostly work in day
 // index order, but an add control only knows the date it belongs to.
 function dayKeyForDateISO(dateISO){
