@@ -8639,10 +8639,12 @@ async function refreshOneGrandScheduleRow(key){
   (await Promise.all(teamsInDepartment(currentDepartmentId).map(async t=> [t.id, await loadWeekForTeam(t.id, weekISO)])))
     .forEach(([id, sched])=>{ weekByTeam[id] = sched; });
   const rows = Array.from(wrap.querySelectorAll('tr[data-gkey]'));
-  const built = await Promise.all(rows.map(row=>{
+  // One row at a time, never in parallel — see renderGrandScheduleGrid.
+  const built = [];
+  for(const row of rows){
     const g = groups[row.dataset.gkey];
-    return g ? buildGrandScheduleRowHtml(row.dataset.gkey, g, dates, weekISO, weekByTeam) : null;
-  }));
+    built.push(g ? await buildGrandScheduleRowHtml(row.dataset.gkey, g, dates, weekISO, weekByTeam) : null);
+  }
   closeAllBarMenus();
   rows.forEach((oldRow, i)=>{
     if(!built[i]) return;
@@ -8683,7 +8685,15 @@ async function renderGrandScheduleGrid(){
     html += `<th class="${bhName?'bank-hol-col':''}" title="${bhName?escAttr(bhName):''}"><div class="day-col-head"><span class="d">${DAY_LABELS[d]}</span><span class="n">${dt.getDate()}</span>${bhName?'<span class="bank-hol-dot"></span>':''}${bdayNames.length?`<span class="bday-indicator" title="${escAttr(bdayNames.join(', '))}">🎂 ${escHtml(bdayNames.join(', '))}</span>`:''}</div></th>`;
   });
   html += '</tr></thead><tbody>';
-  const rowsHtml = await Promise.all(names.map(key=> buildGrandScheduleRowHtml(key, groups[key], dates, weekISO, weekByTeam)));
+  // One row at a time, never in parallel. Each row briefly switches the app's current team
+  // and week to each of its teams (readWithBorrowedTeamContext) and puts back whatever it found
+  // when it's done. Built in parallel, the rows interleaved: one row "put back" the team another
+  // had switched to, and the app was left on some other team than the one in the sidebar —
+  // so the team Schedule tab offered the wrong people (and could save to the wrong team), and
+  // the "+" lists here missed people they should have shown. The data is already fetched, so
+  // building in order costs next to nothing.
+  const rowsHtml = [];
+  for(const key of names) rowsHtml.push(await buildGrandScheduleRowHtml(key, groups[key], dates, weekISO, weekByTeam));
   html += rowsHtml.join('');
   html += '</tbody></table>';
   wrap.innerHTML = html;
